@@ -1,0 +1,6 @@
+Asynchronous TCP socket module for python 3.  Inspired by the design of
+Boost ASIO.  The asio module currently supports TCP sockets only, and 
+supports asynchronous versions of common client operations (connect, read,
+write) and server operations (accept).
+
+A small TCP proxy implementation is also included as an example (proxy.py).
