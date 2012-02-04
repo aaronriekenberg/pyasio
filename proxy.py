@@ -57,9 +57,9 @@ class Connection(object):
                     self.__proxyToRemoteSocket.fileno()))
       self.__proxyToRemoteSocket.close()
 
-  def __connectCallback(self, err):
-    if (err != 0):
-      logger.info('connect error \'{0}\''.format(os.strerror(err)))
+  def __connectCallback(self, error):
+    if (error != 0):
+      logger.info('connect error \'{0}\''.format(os.strerror(error)))
       self.close()
     else:
       self.__proxyToRemoteString = '{0} -> {1}'.format(
@@ -75,10 +75,10 @@ class Connection(object):
         MAX_READ_BYTES,
         self.__readFromRemoteCallback)
 
-  def __readFromClientCallback(self, data, err):
+  def __readFromClientCallback(self, data, error):
     if self.__proxyToRemoteSocket.closed():
       self.close()
-    elif (err != 0):
+    elif (error != 0):
       self.close()
     elif not data:
       self.close()
@@ -86,10 +86,10 @@ class Connection(object):
       self.__writingToRemote = True
       self.__proxyToRemoteSocket.asyncWriteAll(data, self.__writeToRemoteCallback)
 
-  def __readFromRemoteCallback(self, data, err):
+  def __readFromRemoteCallback(self, data, error):
     if self.__clientToProxySocket.closed():
       self.close()
-    elif (err != 0):
+    elif (error != 0):
       self.close()
     elif not data:
       self.close()
@@ -97,20 +97,20 @@ class Connection(object):
       self.__writingToClient = True
       self.__clientToProxySocket.asyncWriteAll(data, self.__writeToClientCallback)
 
-  def __writeToRemoteCallback(self, err):
+  def __writeToRemoteCallback(self, error):
     self.__writingToRemote = False
     if self.__clientToProxySocket.closed():
       self.close()
-    elif (err != 0):
+    elif (error != 0):
       self.close()
     else:
       self.__clientToProxySocket.asyncRead(MAX_READ_BYTES, self.__readFromClientCallback)
 
-  def __writeToClientCallback(self, err):
+  def __writeToClientCallback(self, error):
     self.__writingToClient = False
     if self.__proxyToRemoteSocket.closed():
       self.close()
-    elif (err != 0):
+    elif (error != 0):
       self.close()
     else:
       self.__proxyToRemoteSocket.asyncRead(MAX_READ_BYTES, self.__readFromRemoteCallback)
@@ -133,13 +133,14 @@ class Acceptor(object):
                 self.__asyncSocket.getsockname(),
                 self.__asyncSocket.fileno()))
 
-  def __acceptCallback(self, sock, err):
-    if ((err == 0) and (sock != None)):
+  def __acceptCallback(self, asyncSocket, error):
+    if ((error == 0) and (asyncSocket != None)):
       logger.info('accept {0} -> {1} (fd={2})'.format(
-                  sock.getpeername(),
-                  sock.getsockname(),
-                  sock.fileno()))
-      Connection(self.__ioService, sock, self.__remoteAddress, self.__remotePort)
+                  asyncSocket.getpeername(),
+                  asyncSocket.getsockname(),
+                  asyncSocket.fileno()))
+      Connection(
+        self.__ioService, asyncSocket, self.__remoteAddress, self.__remotePort)
     self.__asyncSocket.asyncAccept(self.__acceptCallback)
 
 def parseAddrPortString(addrPortString):
