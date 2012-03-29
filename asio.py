@@ -242,17 +242,21 @@ class AsyncSocket(object):
   def bind(self, addr):
     self.__socket.bind(addr)
 
-  def asyncConnect(self, address, callback):
+  def __verifyStateForNewOperation(
+    self, ignoreInProgressRead = False, ignoreInProgressWrite = False):
+    if (self.__closed):
+      raise AsyncException('AsyncSocket closed')
     if (self.__acceptOperation):
       raise AsyncException('Accept already in progress')
     if (self.__connectOperation):
       raise AsyncException('Connect already in progress')
-    if (self.__readOperation):
+    if ((not ignoreInProgressRead) and self.__readOperation):
       raise AsyncException('Read already in progress')
-    if (self.__writeOperation):
+    if ((not ignoreInProgressWrite) and self.__writeOperation):
       raise AsyncException('Write all already in progress')
-    if (self.__closed):
-      raise AsyncException('AsyncSocket closed')
+
+  def asyncConnect(self, address, callback):
+    self.__verifyStateForNewOperation()
 
     self.__connectOperation = self.__pollOperation(
       AsyncSocket.ConnectOperation(
@@ -261,16 +265,7 @@ class AsyncSocket(object):
         callback = callback))
 
   def asyncAccept(self, callback):
-    if (self.__acceptOperation):
-      raise AsyncException('Accept already in progress')
-    if (self.__connectOperation):
-      raise AsyncException('Connect already in progress')
-    if (self.__readOperation):
-      raise AsyncException('Read already in progress')
-    if (self.__writeOperation):
-      raise AsyncException('Write all already in progress')
-    if (self.__closed):
-      raise AsyncException('AsyncSocket closed')
+    self.__verifyStateForNewOperation()
 
     self.__acceptOperation = self.__pollOperation(
       AsyncSocket.AcceptOperation(
@@ -278,14 +273,7 @@ class AsyncSocket(object):
         callback = callback))
 
   def asyncRead(self, maxBytes, callback):
-    if (self.__acceptOperation):
-      raise AsyncException('Accept already in progress')
-    if (self.__connectOperation):
-      raise AsyncException('Connect already in progress')
-    if (self.__readOperation):
-      raise AsyncException('Read already in progress')
-    if (self.__closed):
-      raise AsyncException('AsyncSocket closed')
+    self.__verifyStateForNewOperation(ignoreInProgressWrite = True)
 
     self.__readOperation = self.__pollOperation(
       AsyncSocket.ReadOperation(
@@ -294,14 +282,7 @@ class AsyncSocket(object):
         callback = callback))
 
   def asyncWriteAll(self, writeBuffer, callback):
-    if (self.__acceptOperation):
-      raise AsyncException('Accept already in progress')
-    if (self.__connectOperation):
-      raise AsyncException('Connect already in progress')
-    if (self.__writeOperation):
-      raise AsyncException('Write all already in progress')
-    if (self.__closed):
-      raise AsyncException('AsyncSocket closed')
+    self.__verifyStateForNewOperation(ignoreInProgressRead = True)
 
     self.__writeOperation = self.__pollOperation(
       AsyncSocket.WriteAllOperation(
