@@ -328,7 +328,7 @@ class AsyncSocket(object):
     self.__writeOperation = self.__sendErrorToOperation(
       self.__writeOperation, error)
 
-  def handleError(self):
+  def handleErrorReady(self):
     error = self.__socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
 
     self.__acceptOperation = self.__sendErrorToOperation(
@@ -340,11 +340,11 @@ class AsyncSocket(object):
     self.__writeOperation = self.__sendErrorToOperation(
       self.__writeOperation, error)
 
-  def handleRead(self):
+  def handleReadReady(self):
     self.__acceptOperation = self.__pollOperation(self.__acceptOperation)
     self.__readOperation = self.__pollOperation(self.__readOperation)
 
-  def handleWrite(self):
+  def handleWriteReady(self):
     self.__connectOperation = self.__pollOperation(self.__connectOperation)
     self.__writeOperation = self.__pollOperation(self.__writeOperation)
 
@@ -479,11 +479,11 @@ class AsyncIOService(object):
     if fd in self.__fdToAsyncSocket:
       asyncSocket = self.__fdToAsyncSocket[fd]
       if (readReady):
-        asyncSocket.handleRead()
+        asyncSocket.handleReadReady()
       if (writeReady):
-        asyncSocket.handleWrite()
+        asyncSocket.handleWriteReady()
       if (errorReady):
-        asyncSocket.handleError()
+        asyncSocket.handleErrorReady()
 
 class EPollAsyncIOService(AsyncIOService):
 
