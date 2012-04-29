@@ -17,14 +17,14 @@ Aaron Riekenberg
 aaron.riekenberg@gmail.com
 '''
 
-ACCEPT_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
-CONNECT_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EINPROGRESS, errno.EINTR])
-READ_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
-WRITE_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
-INTERRUPTED_ERRNO = errno.EINTR
-SOCKET_CLOSED_ERRNO = errno.EBADF
+_ACCEPT_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
+_CONNECT_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EINPROGRESS, errno.EINTR])
+_READ_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
+_WRITE_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
+_INTERRUPTED_ERRNO = errno.EINTR
+_SOCKET_CLOSED_ERRNO = errno.EBADF
 
-def signalSafeFunctionCall(function, *args, **kwargs):
+def _signalSafeFunctionCall(function, *args, **kwargs):
   retVal = None
   completedWithoutInterruption = False
   while (not completedWithoutInterruption):
@@ -32,7 +32,7 @@ def signalSafeFunctionCall(function, *args, **kwargs):
       retVal = function(*args, **kwargs)
       completedWithoutInterruption = True
     except EnvironmentError as e:
-      if (e.errno == INTERRUPTED_ERRNO):
+      if (e.errno == _INTERRUPTED_ERRNO):
         completedWithoutInterruption = False
       else:
         raise
@@ -68,12 +68,12 @@ class AsyncSocket(object):
         return
 
       try:
-        (newSocket, addr) = signalSafeFunctionCall(
+        (newSocket, addr) = _signalSafeFunctionCall(
                               self.__asyncSocket.getSocket().accept)
         asyncSocket = AsyncSocket(self.__asyncIOService, newSocket)
         self.__setComplete(asyncSocket, 0)
       except socket.error as e:
-        if e.errno in ACCEPT_WOULD_BLOCK_ERRNO_SET:
+        if e.errno in _ACCEPT_WOULD_BLOCK_ERRNO_SET:
           self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
         else:
           self.__setComplete(None, e.errno)
@@ -109,14 +109,14 @@ class AsyncSocket(object):
       if not self.__calledConnect:
         error = self.__asyncSocket.getSocket().connect_ex(self.__address)
         self.__calledConnect = True
-        if error in CONNECT_WOULD_BLOCK_ERRNO_SET:
+        if error in _CONNECT_WOULD_BLOCK_ERRNO_SET:
           self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
         else:
           self.__setComplete(error)
       else:
         error = self.__asyncSocket.getSocket().getsockopt(
                 socket.SOL_SOCKET, socket.SO_ERROR)
-        if error not in CONNECT_WOULD_BLOCK_ERRNO_SET:
+        if error not in _CONNECT_WOULD_BLOCK_ERRNO_SET:
           self.__setComplete(error)
 
     def __setComplete(self, error):
@@ -147,11 +147,11 @@ class AsyncSocket(object):
         return
 
       try:
-        data = signalSafeFunctionCall(
+        data = _signalSafeFunctionCall(
                  self.__asyncSocket.getSocket().recv, self.__maxBytes)
         self.__setComplete(data, 0)
       except socket.error as e:
-        if e.errno in READ_WOULD_BLOCK_ERRNO_SET:
+        if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
           self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
         else:
           self.__setComplete(None, e.errno)
@@ -185,7 +185,7 @@ class AsyncSocket(object):
 
       writeWouldBlock = False
       try:
-        bytesSent = signalSafeFunctionCall(
+        bytesSent = _signalSafeFunctionCall(
                       self.__asyncSocket.getSocket().send, self.__writeBuffer)
         self.__writeBuffer = self.__writeBuffer[bytesSent:]
         if (len(self.__writeBuffer) == 0):
@@ -193,7 +193,7 @@ class AsyncSocket(object):
         else:
           writeWouldBlock = True
       except socket.error as e:
-        if e.errno in WRITE_WOULD_BLOCK_ERRNO_SET:
+        if e.errno in _WRITE_WOULD_BLOCK_ERRNO_SET:
           writeWouldBlock = True
         else:
           self.__setComplete(e.errno)
@@ -316,7 +316,7 @@ class AsyncSocket(object):
     self.__socket.close()
     self.__closed = True
 
-    error = SOCKET_CLOSED_ERRNO
+    error = _SOCKET_CLOSED_ERRNO
 
     self.__acceptOperation = self.__sendErrorToOperation(
       self.__acceptOperation, error)
@@ -516,7 +516,7 @@ class EPollAsyncIOService(AsyncIOService):
     self.__poller.unregister(fileno)
 
   def doPoll(self, block):
-    readyList = signalSafeFunctionCall(self.__poller.poll, -1 if block else 0)
+    readyList = _signalSafeFunctionCall(self.__poller.poll, -1 if block else 0)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.EPOLLIN) != 0)
       writeReady = ((eventMask & select.EPOLLOUT) != 0)
@@ -642,7 +642,7 @@ class PollAsyncIOService(AsyncIOService):
     self.__poller.unregister(fileno)
 
   def doPoll(self, block):
-    readyList = signalSafeFunctionCall(self.__poller.poll, None if block else 0)
+    readyList = _signalSafeFunctionCall(self.__poller.poll, None if block else 0)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.POLLIN) != 0)
       writeReady = ((eventMask & select.POLLOUT) != 0)
@@ -673,7 +673,7 @@ class SelectAsyncIOService(AsyncIOService):
   def doPoll(self, block):
     allFDSet = self.getReadFDSet() | self.getWriteFDSet()
     (readList, writeList, exceptList) = \
-      signalSafeFunctionCall(
+      _signalSafeFunctionCall(
         select.select, 
         self.getReadFDSet(), self.getWriteFDSet(), allFDSet,
         None if block else 0)
