@@ -24,15 +24,33 @@ _WRITE_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
 _INTERRUPTED_ERRNO = errno.EINTR
 _SOCKET_CLOSED_ERRNO = errno.EBADF
 
-def _signalSafeFunctionCall(function, *args, **kwargs):
-  while True:
-    try:
-      return function(*args, **kwargs)
-    except EnvironmentError as e:
-      if (e.errno == _INTERRUPTED_ERRNO):
-        pass
-      else:
-        raise
+def _signalSafe(function):
+  def wrapper(*args, **kwargs):
+    while True:
+      try:
+        return function(*args, **kwargs)
+      except EnvironmentError as e:
+        if (e.errno == _INTERRUPTED_ERRNO):
+          pass
+        else:
+          raise
+  return wrapper
+
+@_signalSafe
+def _signalSafeAccept(s):
+  return s.accept()
+
+@_signalSafe
+def _signalSafeRecv(s, bufsize):
+  return s.recv(bufsize)
+
+@_signalSafe
+def _signalSafeSend(s, buf):
+  return s.send(buf)
+
+@_signalSafe
+def _signalSafeClose(s):
+  return s.close()
 
 class AsyncException(Exception):
 
@@ -64,8 +82,7 @@ class AsyncSocket(object):
         return
 
       try:
-        (newSocket, addr) = _signalSafeFunctionCall(
-                              self.__asyncSocket.getSocket().accept)
+        (newSocket, addr) = _signalSafeAccept(self.__asyncSocket.getSocket())
         asyncSocket = AsyncSocket(self.__asyncIOService, newSocket)
         self.__setComplete(asyncSocket, 0)
       except socket.error as e:
@@ -143,8 +160,7 @@ class AsyncSocket(object):
         return
 
       try:
-        data = _signalSafeFunctionCall(
-                 self.__asyncSocket.getSocket().recv, self.__maxBytes)
+        data = _signalSafeRecv(self.__asyncSocket.getSocket(), self.__maxBytes)
         self.__setComplete(data, 0)
       except socket.error as e:
         if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
@@ -181,8 +197,7 @@ class AsyncSocket(object):
 
       writeWouldBlock = False
       try:
-        bytesSent = _signalSafeFunctionCall(
-                      self.__asyncSocket.getSocket().send, self.__writeBuffer)
+        bytesSent = _signalSafeSend(self.__asyncSocket.getSocket(), self.__writeBuffer)
         self.__writeBuffer = self.__writeBuffer[bytesSent:]
         if (len(self.__writeBuffer) == 0):
           self.__setComplete(0)
@@ -309,7 +324,7 @@ class AsyncSocket(object):
       return
 
     self.__asyncIOService.removeAsyncSocket(self)
-    _signalSafeFunctionCall(self.__socket.close)
+    _signalSafeClose(self.__socket)
     self.__closed = True
 
     error = _SOCKET_CLOSED_ERRNO
@@ -485,6 +500,7 @@ class EPollAsyncIOService(AsyncIOService):
   def __init__(self):
     super().__init__()
     self.__poller = select.epoll()
+    self.__pollFunction = _signalSafe(self.__poller.poll)
 
   def __str__(self):
     return ('EPollAsyncIOService [ fileno = {0} ]'.format(self.__poller.fileno()))
@@ -512,7 +528,7 @@ class EPollAsyncIOService(AsyncIOService):
     self.__poller.unregister(fileno)
 
   def doPoll(self, block):
-    readyList = _signalSafeFunctionCall(self.__poller.poll, -1 if block else 0)
+    readyList = self.__pollFunction(-1 if block else 0)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.EPOLLIN) != 0)
       writeReady = ((eventMask & select.EPOLLOUT) != 0)
@@ -528,6 +544,7 @@ class KQueueAsyncIOService(AsyncIOService):
   def __init__(self):
     super().__init__()
     self.__kqueue = select.kqueue()
+    self.__kqueueControlFunction = _signalSafe(self.__kqueue.control)
 
   def __str__(self):
     return ('KQueueAsyncIOService [ fileno = {0} ]'.format(self.__kqueue.fileno()))
@@ -552,8 +569,8 @@ class KQueueAsyncIOService(AsyncIOService):
                               flags = (select.KQ_EV_ADD | select.KQ_EV_DISABLE))
     # Should be able to put readKE and writeKE in a list in
     # one call to kqueue.control, but this is broken due to Python issue 5910
-    self.__kqueue.control([readKE], 0, 0)
-    self.__kqueue.control([writeKE], 0, 0)
+    self.__kqueueControlFunction([readKE], 0, 0)
+    self.__kqueueControlFunction([writeKE], 0, 0)
 
   def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
     fileno = asyncSocket.fileno()
@@ -575,8 +592,8 @@ class KQueueAsyncIOService(AsyncIOService):
                               flags = select.KQ_EV_DISABLE)
     # Should be able to put readKE and writeKE in a list in
     # one call to kqueue.control, but this is broken due to Python issue 5910
-    self.__kqueue.control([readKE], 0, 0)
-    self.__kqueue.control([writeKE], 0, 0)
+    self.__kqueueControlFunction([readKE], 0, 0)
+    self.__kqueueControlFunction([writeKE], 0, 0)
 
   def unregisterForEvents(self, asyncSocket):
     fileno = asyncSocket.fileno()
@@ -588,11 +605,11 @@ class KQueueAsyncIOService(AsyncIOService):
                             flags = select.KQ_EV_DELETE)
     # Should be able to put readKE and writeKE in a list in
     # one call to kqueue.control, but this is broken due to Python issue 5910
-    self.__kqueue.control([readKE], 0, 0)
-    self.__kqueue.control([writeKE], 0, 0)
+    self.__kqueueControlFunction([readKE], 0, 0)
+    self.__kqueueControlFunction([writeKE], 0, 0)
 
   def doPoll(self, block):
-    eventList = self.__kqueue.control(
+    eventList = self.__kqueueControlFunction(
                   None,
                   self.getNumFDs() * 2,
                   None if block else 0)
@@ -611,6 +628,7 @@ class PollAsyncIOService(AsyncIOService):
   def __init__(self):
     super().__init__()
     self.__poller = select.poll()
+    self.__pollFunction = _signalSafe(self.__poller.poll)
 
   def __str__(self):
     return 'PollAsyncIOService'
@@ -638,7 +656,7 @@ class PollAsyncIOService(AsyncIOService):
     self.__poller.unregister(fileno)
 
   def doPoll(self, block):
-    readyList = _signalSafeFunctionCall(self.__poller.poll, None if block else 0)
+    readyList = self.__pollFunction(None if block else 0)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.POLLIN) != 0)
       writeReady = ((eventMask & select.POLLOUT) != 0)
@@ -653,6 +671,7 @@ class SelectAsyncIOService(AsyncIOService):
 
   def __init__(self):
     super().__init__()
+    self.__pollFunction = _signalSafe(select.select)
 
   def __str__(self):
     return 'SelectAsyncIOService'
@@ -669,8 +688,7 @@ class SelectAsyncIOService(AsyncIOService):
   def doPoll(self, block):
     allFDSet = self.getReadFDSet() | self.getWriteFDSet()
     (readList, writeList, exceptList) = \
-      _signalSafeFunctionCall(
-        select.select, 
+      self.__pollFunction(
         self.getReadFDSet(), self.getWriteFDSet(), allFDSet,
         None if block else 0)
     for fd in allFDSet:
