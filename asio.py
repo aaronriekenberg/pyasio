@@ -25,18 +25,14 @@ _INTERRUPTED_ERRNO = errno.EINTR
 _SOCKET_CLOSED_ERRNO = errno.EBADF
 
 def _signalSafeFunctionCall(function, *args, **kwargs):
-  retVal = None
-  completedWithoutInterruption = False
-  while (not completedWithoutInterruption):
+  while True:
     try:
-      retVal = function(*args, **kwargs)
-      completedWithoutInterruption = True
+      return function(*args, **kwargs)
     except EnvironmentError as e:
       if (e.errno == _INTERRUPTED_ERRNO):
-        completedWithoutInterruption = False
+        pass
       else:
         raise
-  return retVal
 
 class AsyncException(Exception):
 
