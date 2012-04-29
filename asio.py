@@ -309,7 +309,7 @@ class AsyncSocket(object):
       return
 
     self.__asyncIOService.removeAsyncSocket(self)
-    self.__socket.close()
+    _signalSafeFunctionCall(self.__socket.close)
     self.__closed = True
 
     error = _SOCKET_CLOSED_ERRNO
