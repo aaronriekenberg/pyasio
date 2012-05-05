@@ -544,10 +544,13 @@ class KQueueAsyncIOService(AsyncIOService):
   def __init__(self):
     super().__init__()
     self.__kqueue = select.kqueue()
-    self.__kqueueControlFunction = _signalSafe(self.__kqueue.control)
 
   def __str__(self):
     return ('KQueueAsyncIOService [ fileno = {0} ]'.format(self.__kqueue.fileno()))
+
+  @_signalSafe
+  def __controlKqueue(self, changeList, maxEvents = 0, timeout = 0):
+    return self.__kqueue.control(changeList, maxEvents, timeout)
 
   def registerForEvents(self, asyncSocket, readEvents, writeEvents):
     fileno = asyncSocket.fileno()
@@ -567,10 +570,7 @@ class KQueueAsyncIOService(AsyncIOService):
       writeKE = select.kevent(ident = fileno,
                               filter = select.KQ_FILTER_WRITE,
                               flags = (select.KQ_EV_ADD | select.KQ_EV_DISABLE))
-    # Should be able to put readKE and writeKE in a list in
-    # one call to kqueue.control, but this is broken due to Python issue 5910
-    self.__kqueueControlFunction([readKE], 0, 0)
-    self.__kqueueControlFunction([writeKE], 0, 0)
+    self.__controlKqueue(changeList = [readKE, writeKE])
 
   def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
     fileno = asyncSocket.fileno()
@@ -590,10 +590,7 @@ class KQueueAsyncIOService(AsyncIOService):
       writeKE = select.kevent(ident = fileno,
                               filter = select.KQ_FILTER_WRITE,
                               flags = select.KQ_EV_DISABLE)
-    # Should be able to put readKE and writeKE in a list in
-    # one call to kqueue.control, but this is broken due to Python issue 5910
-    self.__kqueueControlFunction([readKE], 0, 0)
-    self.__kqueueControlFunction([writeKE], 0, 0)
+    self.__controlKqueue(changeList = [readKE, writeKE])
 
   def unregisterForEvents(self, asyncSocket):
     fileno = asyncSocket.fileno()
@@ -603,16 +600,13 @@ class KQueueAsyncIOService(AsyncIOService):
     writeKE = select.kevent(ident = fileno,
                             filter = select.KQ_FILTER_WRITE,
                             flags = select.KQ_EV_DELETE)
-    # Should be able to put readKE and writeKE in a list in
-    # one call to kqueue.control, but this is broken due to Python issue 5910
-    self.__kqueueControlFunction([readKE], 0, 0)
-    self.__kqueueControlFunction([writeKE], 0, 0)
+    self.__controlKqueue(changeList = [readKE, writeKE])
 
   def doPoll(self, block):
-    eventList = self.__kqueueControlFunction(
-                  None,
-                  self.getNumFDs() * 2,
-                  None if block else 0)
+    eventList = self.__controlKqueue(
+                  changeList = None,
+                  maxEvents = (self.getNumFDs() * 2),
+                  timeout = (None if block else 0))
     for ke in eventList:
       fd = ke.ident
       readReady = (ke.filter == select.KQ_FILTER_READ)
