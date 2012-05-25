@@ -500,7 +500,6 @@ class EPollAsyncIOService(AsyncIOService):
   def __init__(self):
     super().__init__()
     self.__poller = select.epoll()
-    self.__pollFunction = _signalSafe(self.__poller.poll)
 
   def __str__(self):
     return ('EPollAsyncIOService [ fileno = {0} ]'.format(self.__poller.fileno()))
@@ -527,8 +526,12 @@ class EPollAsyncIOService(AsyncIOService):
     fileno = asyncSocket.fileno()
     self.__poller.unregister(fileno)
 
+  @_signalSafe
+  def __poll(self, block):
+    return self.__poller.poll(-1 if block else 0)
+
   def doPoll(self, block):
-    readyList = self.__pollFunction(-1 if block else 0)
+    readyList = self.__poll(block = block)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.EPOLLIN) != 0)
       writeReady = ((eventMask & select.EPOLLOUT) != 0)
@@ -622,7 +625,6 @@ class PollAsyncIOService(AsyncIOService):
   def __init__(self):
     super().__init__()
     self.__poller = select.poll()
-    self.__pollFunction = _signalSafe(self.__poller.poll)
 
   def __str__(self):
     return 'PollAsyncIOService'
@@ -649,8 +651,12 @@ class PollAsyncIOService(AsyncIOService):
     fileno = asyncSocket.fileno()
     self.__poller.unregister(fileno)
 
+  @_signalSafe
+  def __poll(self, block):
+    return self.__poller.poll(None if block else 0)
+
   def doPoll(self, block):
-    readyList = self.__pollFunction(None if block else 0)
+    readyList = self.__poll(block)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.POLLIN) != 0)
       writeReady = ((eventMask & select.POLLOUT) != 0)
@@ -665,7 +671,6 @@ class SelectAsyncIOService(AsyncIOService):
 
   def __init__(self):
     super().__init__()
-    self.__pollFunction = _signalSafe(select.select)
 
   def __str__(self):
     return 'SelectAsyncIOService'
@@ -679,12 +684,15 @@ class SelectAsyncIOService(AsyncIOService):
   def unregisterForEvents(self, asyncSocket):
     pass
 
+  @_signalSafe
+  def __poll(self, block, allFDSet):
+    return select.select(
+      self.getReadFDSet(), self.getWriteFDSet(), allFDSet,
+      None if block else 0)
+
   def doPoll(self, block):
     allFDSet = self.getReadFDSet() | self.getWriteFDSet()
-    (readList, writeList, exceptList) = \
-      self.__pollFunction(
-        self.getReadFDSet(), self.getWriteFDSet(), allFDSet,
-        None if block else 0)
+    (readList, writeList, exceptList) = self.__poll(block, allFDSet)
     for fd in allFDSet:
       readReady = fd in readList
       writeReady = fd in writeList
