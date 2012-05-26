@@ -85,7 +85,7 @@ class AsyncSocket(object):
         (newSocket, addr) = _signalSafeAccept(self.__asyncSocket.getSocket())
         asyncSocket = AsyncSocket(self.__asyncIOService, newSocket)
         self.__setComplete(asyncSocket, 0)
-      except socket.error as e:
+      except EnvironmentError as e:
         if e.errno in _ACCEPT_WOULD_BLOCK_ERRNO_SET:
           self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
         else:
@@ -162,7 +162,7 @@ class AsyncSocket(object):
       try:
         data = _signalSafeRecv(self.__asyncSocket.getSocket(), self.__maxBytes)
         self.__setComplete(data, 0)
-      except socket.error as e:
+      except EnvironmentError as e:
         if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
           self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
         else:
@@ -203,7 +203,7 @@ class AsyncSocket(object):
           self.__setComplete(0)
         else:
           writeWouldBlock = True
-      except socket.error as e:
+      except EnvironmentError as e:
         if e.errno in _WRITE_WOULD_BLOCK_ERRNO_SET:
           writeWouldBlock = True
         else:
