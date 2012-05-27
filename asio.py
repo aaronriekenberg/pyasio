@@ -732,10 +732,11 @@ class SelectAsyncIOService(AbstractAsyncIOService):
       readReady = fd in readList
       writeReady = fd in writeList
       errorReady = fd in exceptList
-      self.handleEventForFD(fd = fd,
-                            readReady = readReady,
-                            writeReady = writeReady,
-                            errorReady = errorReady)
+      if (readReady or writeReady or errorReady):
+        self.handleEventForFD(fd = fd,
+                              readReady = readReady,
+                              writeReady = writeReady,
+                              errorReady = errorReady)
 
 def createAsyncIOService(allow_epoll = True,
                          allow_kqueue = True,
