@@ -716,23 +716,26 @@ class SelectAsyncIOService(AbstractAsyncIOService):
     pass
 
   @_signalSafe
-  def __poll(self, block, allFDSet):
-    return select.select(
-      self.getReadFDSet(), self.getWriteFDSet(), allFDSet,
-      None if block else 0)
+  def __poll(self, readFDSet, writeFDSet, allFDSet, block):
+    return select.select(readFDSet, writeFDSet, allFDSet, None if block else 0)
 
   def doPoll(self, block):
-    allFDSet = self.getReadFDSet() | self.getWriteFDSet()
-    (readList, writeList, exceptList) = self.__poll(block, allFDSet)
+    readFDSet = self.getReadFDSet()
+    writeFDSet = self.getWriteFDSet()
+    allFDSet = readFDSet | writeFDSet
+    (readList, writeList, exceptList) = self.__poll(
+      readFDSet = readFDSet,
+      writeFDSet = writeFDSet,
+      allFDSet = allFDSet,
+      block = block)
     for fd in allFDSet:
       readReady = fd in readList
       writeReady = fd in writeList
       errorReady = fd in exceptList
-      if (readReady or writeReady or errorReady):
-        self.handleEventForFD(fd = fd,
-                              readReady = readReady,
-                              writeReady = writeReady,
-                              errorReady = errorReady)
+      self.handleEventForFD(fd = fd,
+                            readReady = readReady,
+                            writeReady = writeReady,
+                            errorReady = errorReady)
 
 def createAsyncIOService(allow_epoll = True,
                          allow_kqueue = True,
