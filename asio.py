@@ -1,3 +1,4 @@
+import abc
 import collections
 import errno
 import functools
@@ -65,7 +66,21 @@ class AsyncSocket(object):
 
   '''Socket class supporting asynchronous operations.'''
 
-  class AcceptOperation(object):
+  class AbstractOperation(metaclass = abc.ABCMeta):
+
+    @abc.abstractmethod
+    def isComplete(self):
+      raise NotImplementedError
+
+    @abc.abstractmethod
+    def poll(self):
+      raise NotImplementedError
+
+    @abc.abstractmethod
+    def handleSocketError(self, error):
+      raise NotImplementedError
+
+  class AcceptOperation(AbstractOperation):
 
     def __init__(self, asyncSocket, callback):
       super().__init__()
@@ -101,7 +116,7 @@ class AsyncSocket(object):
     def handleSocketError(self, error):
       self.__setComplete(asyncSocket = None, error = error)
 
-  class ConnectOperation(object):
+  class ConnectOperation(AbstractOperation):
 
     def __init__(self, address, asyncSocket, callback):
       super().__init__()
@@ -142,7 +157,7 @@ class AsyncSocket(object):
     def handleSocketError(self, error):
       self.__setComplete(error)
 
-  class ReadOperation(object):
+  class ReadOperation(AbstractOperation):
 
     def __init__(self, maxBytes, asyncSocket, callback):
       super().__init__()
@@ -178,7 +193,7 @@ class AsyncSocket(object):
     def handleSocketError(self, error):
       self.__setComplete(data = None, error = error)
 
-  class WriteAllOperation(object):
+  class WriteAllOperation(AbstractOperation):
 
     def __init__(self, writeBuffer, asyncSocket, callback):
       super().__init__()
@@ -372,7 +387,7 @@ class AsyncSocket(object):
         operation = None
     return operation
 
-class AsyncIOService(object):
+class AbstractAsyncIOService(metaclass = abc.ABCMeta):
 
   '''Service used to poll asynchronous sockets.'''
 
@@ -447,15 +462,19 @@ class AsyncIOService(object):
   def getNumFDs(self):
     return len(self.__fdToAsyncSocket)
 
+  @abc.abstractmethod
   def registerForEvents(self, asyncSocket, readEvents, writeEvents):
     raise NotImplementedError
 
+  @abc.abstractmethod
   def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
     raise NotImplementedError
 
+  @abc.abstractmethod
   def unregisterForEvents(self, asyncSocket):
     raise NotImplementedError
 
+  @abc.abstractmethod
   def doPoll(self, block):
     raise NotImplementedError
 
@@ -495,7 +514,7 @@ class AsyncIOService(object):
       if (errorReady):
         asyncSocket.handleErrorReady()
 
-class EPollAsyncIOService(AsyncIOService):
+class EPollAsyncIOService(AbstractAsyncIOService):
 
   def __init__(self):
     super().__init__()
@@ -542,7 +561,7 @@ class EPollAsyncIOService(AsyncIOService):
                             writeReady = writeReady,
                             errorReady = errorReady)
 
-class KQueueAsyncIOService(AsyncIOService):
+class KQueueAsyncIOService(AbstractAsyncIOService):
 
   def __init__(self):
     super().__init__()
@@ -620,7 +639,7 @@ class KQueueAsyncIOService(AsyncIOService):
                             writeReady = writeReady,
                             errorReady = errorReady)
 
-class PollAsyncIOService(AsyncIOService):
+class PollAsyncIOService(AbstractAsyncIOService):
 
   def __init__(self):
     super().__init__()
@@ -667,7 +686,7 @@ class PollAsyncIOService(AsyncIOService):
                             writeReady = writeReady,
                             errorReady = errorReady)
 
-class SelectAsyncIOService(AsyncIOService):
+class SelectAsyncIOService(AbstractAsyncIOService):
 
   def __init__(self):
     super().__init__()
