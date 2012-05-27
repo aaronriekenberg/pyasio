@@ -516,6 +516,10 @@ class AbstractAsyncIOService(metaclass = abc.ABCMeta):
 
 class EPollAsyncIOService(AbstractAsyncIOService):
 
+  @staticmethod
+  def isAvailable():
+    return hasattr(select, 'epoll')
+
   def __init__(self):
     super().__init__()
     self.__poller = select.epoll()
@@ -562,6 +566,10 @@ class EPollAsyncIOService(AbstractAsyncIOService):
                             errorReady = errorReady)
 
 class KQueueAsyncIOService(AbstractAsyncIOService):
+
+  @staticmethod
+  def isAvailable():
+    return hasattr(select, 'kqueue')
 
   def __init__(self):
     super().__init__()
@@ -640,6 +648,10 @@ class KQueueAsyncIOService(AbstractAsyncIOService):
                             errorReady = errorReady)
 
 class PollAsyncIOService(AbstractAsyncIOService):
+
+  @staticmethod
+  def isAvailable():
+    return hasattr(select, 'poll')
 
   def __init__(self):
     super().__init__()
@@ -727,11 +739,11 @@ def createAsyncIOService(allow_epoll = True,
                          allow_poll = True):
   '''Create an AsyncIOService supported by the platform and parameters.'''
 
-  if (allow_epoll and hasattr(select, 'epoll')):
+  if (allow_epoll and EPollAsyncIOService.isAvailable()):
     return EPollAsyncIOService()
-  elif (allow_kqueue and hasattr(select, 'kqueue')):
+  elif (allow_kqueue and KQueueAsyncIOService.isAvailable()):
     return KQueueAsyncIOService()
-  elif (allow_poll and hasattr(select, 'poll')):
+  elif (allow_poll and PollAsyncIOService.isAvailable()):
     return PollAsyncIOService()
   else:
     return SelectAsyncIOService()
