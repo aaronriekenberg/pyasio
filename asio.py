@@ -256,13 +256,19 @@ class AsyncSocket(object):
     return ('AsyncSocket [ fileno = {0} ]'.format(self.fileno()))
 
   def getsockname(self):
+    self.assertNotClosed()
     return self.__socket.getsockname()
 
   def getpeername(self):
+    self.assertNotClosed()
     return self.__socket.getpeername()
  
   def closed(self):
     return self.__closed
+
+  def assertNotClosed(self):
+    if self.__closed:
+      raise AsyncException('AsyncSocket closed')
 
   def getAsyncIOService(self):
     return self.__asyncIOService
@@ -271,19 +277,20 @@ class AsyncSocket(object):
     return self.__socket
 
   def fileno(self):
-    if self.__closed:
-      return -1
-    else:
-      return self.__socket.fileno()
+    self.assertNotClosed()
+    return self.__socket.fileno()
 
   def setReuseAddress(self):
+    self.assertNotClosed()
     self.__socket.setsockopt(
       socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
   def listen(self, backlog = socket.SOMAXCONN):
+    self.assertNotClosed()
     self.__socket.listen(backlog)
 
   def bind(self, addr):
+    self.assertNotClosed()
     self.__socket.bind(addr)
 
   def __verifyStateForNewOperation(
@@ -338,10 +345,6 @@ class AsyncSocket(object):
     if self.__closed:
       return
 
-    self.__asyncIOService.removeAsyncSocket(self)
-    _signalSafeClose(self.__socket)
-    self.__closed = True
-
     error = _SOCKET_CLOSED_ERRNO
 
     self.__acceptOperation = self.__sendErrorToOperation(
@@ -353,17 +356,21 @@ class AsyncSocket(object):
     self.__writeOperation = self.__sendErrorToOperation(
       self.__writeOperation, error)
 
+    self.__asyncIOService.removeAsyncSocket(self)
+    _signalSafeClose(self.__socket)
+    self.__closed = True
+
   def handleErrorReady(self):
     error = self.__socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-
-    self.__acceptOperation = self.__sendErrorToOperation(
-      self.__acceptOperation, error)
-    self.__connectOperation = self.__sendErrorToOperation(
-      self.__connectOperation, error)
-    self.__readOperation = self.__sendErrorToOperation(
-      self.__readOperation, error)
-    self.__writeOperation = self.__sendErrorToOperation(
-      self.__writeOperation, error)
+    if (error != 0):
+      self.__acceptOperation = self.__sendErrorToOperation(
+        self.__acceptOperation, error)
+      self.__connectOperation = self.__sendErrorToOperation(
+        self.__connectOperation, error)
+      self.__readOperation = self.__sendErrorToOperation(
+        self.__readOperation, error)
+      self.__writeOperation = self.__sendErrorToOperation(
+        self.__writeOperation, error)
 
   def handleReadReady(self):
     self.__acceptOperation = self.__pollOperation(self.__acceptOperation)
@@ -387,80 +394,7 @@ class AsyncSocket(object):
         operation = None
     return operation
 
-class AbstractAsyncIOService(metaclass = abc.ABCMeta):
-
-  '''Service used to poll asynchronous sockets.'''
-
-  def __init__(self):
-    super().__init__()
-    self.__fdToAsyncSocket = {}
-    self.__fdsRegisteredForRead = set()
-    self.__fdsRegisteredForWrite = set()
-    self.__eventQueue = collections.deque()
-
-  def createAsyncSocket(self):
-    return AsyncSocket(asyncIOService = self)
-
-  def addAsyncSocket(self, asyncSocket):
-    self.__fdToAsyncSocket[asyncSocket.fileno()] = asyncSocket
-
-  def removeAsyncSocket(self, asyncSocket):
-    fileno = asyncSocket.fileno()
-    if fileno in self.__fdToAsyncSocket:
-      del self.__fdToAsyncSocket[fileno]
-    if ((fileno in self.__fdsRegisteredForRead) or
-        (fileno in self.__fdsRegisteredForWrite)):
-      self.unregisterForEvents(asyncSocket)
-      self.__fdsRegisteredForRead.discard(fileno)
-      self.__fdsRegisteredForWrite.discard(fileno)
-
-  def invokeLater(self, event):
-    self.__eventQueue.append(event)
-
-  def registerAsyncSocketForRead(self, asyncSocket):
-    fileno = asyncSocket.fileno()
-    if fileno not in self.__fdsRegisteredForRead:
-      if fileno in self.__fdsRegisteredForWrite:
-        self.modifyRegistrationForEvents(asyncSocket, readEvents = True, writeEvents = True)
-      else:
-        self.registerForEvents(asyncSocket, readEvents = True, writeEvents = False)
-      self.__fdsRegisteredForRead.add(fileno)
-
-  def unregisterAsyncSocketForRead(self, asyncSocket):
-    fileno = asyncSocket.fileno()
-    if fileno in self.__fdsRegisteredForRead:
-      if fileno in self.__fdsRegisteredForWrite:
-        self.modifyRegistrationForEvents(asyncSocket, readEvents = False, writeEvents = True)
-      else:
-        self.unregisterForEvents(asyncSocket)
-      self.__fdsRegisteredForRead.discard(fileno)
-
-  def registerAsyncSocketForWrite(self, asyncSocket):
-    fileno = asyncSocket.fileno()
-    if fileno not in self.__fdsRegisteredForWrite:
-      if fileno in self.__fdsRegisteredForRead:
-        self.modifyRegistrationForEvents(asyncSocket, readEvents = True, writeEvents = True)
-      else:
-        self.registerForEvents(asyncSocket, readEvents = False, writeEvents = True)
-      self.__fdsRegisteredForWrite.add(fileno)
-
-  def unregisterAsyncSocketForWrite(self, asyncSocket):
-    fileno = asyncSocket.fileno()
-    if fileno in self.__fdsRegisteredForWrite:
-      if fileno in self.__fdsRegisteredForRead:
-        self.modifyRegistrationForEvents(asyncSocket, readEvents = True, writeEvents = False)
-      else:
-        self.unregisterForEvents(asyncSocket)
-      self.__fdsRegisteredForWrite.discard(fileno)
-
-  def getReadFDSet(self):
-    return self.__fdsRegisteredForRead
-
-  def getWriteFDSet(self):
-    return self.__fdsRegisteredForWrite
-
-  def getNumFDs(self):
-    return len(self.__fdToAsyncSocket)
+class _AbstractPoller(metaclass = abc.ABCMeta):
 
   @abc.abstractmethod
   def registerForEvents(self, asyncSocket, readEvents, writeEvents):
@@ -475,16 +409,92 @@ class AbstractAsyncIOService(metaclass = abc.ABCMeta):
     raise NotImplementedError
 
   @abc.abstractmethod
-  def doPoll(self, block):
+  def poll(self, block, eventCallback):
     raise NotImplementedError
+
+class AsyncIOService(object):
+
+  '''Service used to poll asynchronous sockets.'''
+
+  def __init__(self, poller):
+    super().__init__()
+    self.__poller = poller
+    self.__fdToAsyncSocket = {}
+    self.__fdsRegisteredForRead = set()
+    self.__fdsRegisteredForWrite = set()
+    self.__eventQueue = collections.deque()
+
+  def __str__(self):
+    return 'AsyncIOService [ poller = ' + str(self.__poller) + ' ]'
+
+  def createAsyncSocket(self):
+    return AsyncSocket(asyncIOService = self)
+
+  def addAsyncSocket(self, asyncSocket):
+    self.__fdToAsyncSocket[asyncSocket.fileno()] = asyncSocket
+
+  def removeAsyncSocket(self, asyncSocket):
+    fileno = asyncSocket.fileno()
+    if fileno in self.__fdToAsyncSocket:
+      del self.__fdToAsyncSocket[fileno]
+    if ((fileno in self.__fdsRegisteredForRead) or
+        (fileno in self.__fdsRegisteredForWrite)):
+      self.__poller.unregisterForEvents(asyncSocket)
+      self.__fdsRegisteredForRead.discard(fileno)
+      self.__fdsRegisteredForWrite.discard(fileno)
+
+  def invokeLater(self, event):
+    self.__eventQueue.append(event)
+
+  def registerAsyncSocketForRead(self, asyncSocket):
+    fileno = asyncSocket.fileno()
+    if fileno not in self.__fdsRegisteredForRead:
+      if fileno in self.__fdsRegisteredForWrite:
+        self.__poller.modifyRegistrationForEvents(
+          asyncSocket, readEvents = True, writeEvents = True)
+      else:
+        self.__poller.registerForEvents(
+          asyncSocket, readEvents = True, writeEvents = False)
+      self.__fdsRegisteredForRead.add(fileno)
+
+  def unregisterAsyncSocketForRead(self, asyncSocket):
+    fileno = asyncSocket.fileno()
+    if fileno in self.__fdsRegisteredForRead:
+      if fileno in self.__fdsRegisteredForWrite:
+        self.__poller.modifyRegistrationForEvents(
+          asyncSocket, readEvents = False, writeEvents = True)
+      else:
+        self.__poller.unregisterForEvents(asyncSocket)
+      self.__fdsRegisteredForRead.discard(fileno)
+
+  def registerAsyncSocketForWrite(self, asyncSocket):
+    fileno = asyncSocket.fileno()
+    if fileno not in self.__fdsRegisteredForWrite:
+      if fileno in self.__fdsRegisteredForRead:
+        self.__poller.modifyRegistrationForEvents(
+          asyncSocket, readEvents = True, writeEvents = True)
+      else:
+        self.__poller.registerForEvents(
+          asyncSocket, readEvents = False, writeEvents = True)
+      self.__fdsRegisteredForWrite.add(fileno)
+
+  def unregisterAsyncSocketForWrite(self, asyncSocket):
+    fileno = asyncSocket.fileno()
+    if fileno in self.__fdsRegisteredForWrite:
+      if fileno in self.__fdsRegisteredForRead:
+        self.__poller.modifyRegistrationForEvents(
+          asyncSocket, readEvents = True, writeEvents = False)
+      else:
+        self.__poller.unregisterForEvents(asyncSocket)
+      self.__fdsRegisteredForWrite.discard(fileno)
 
   def run(self):
     while True:
       # As we process events in self.__eventQueue, more events are likely
       # to be added to it by invokeLater.  We don't want to starve events
-      # coming in from doPoll, so we limit the number of events processed
+      # coming in from poll, so we limit the number of events processed
       # from self.__eventQueue to the initial size of the queue.  After this if
-      # the queue is still not empty, set doPoll to be non blocking so we get
+      # the queue is still not empty, set poll to be non blocking so we get
       # back to processing events in the queue in a timely manner.
       initialQueueLength = len(self.__eventQueue)
       eventsProcessed = 0
@@ -502,9 +512,11 @@ class AbstractAsyncIOService(metaclass = abc.ABCMeta):
       block = True
       if (len(self.__eventQueue) > 0):
         block = False
-      self.doPoll(block = block)
+      self.__poller.poll(
+        block = block,
+        eventCallback = self.__handleEventForFD)
 
-  def handleEventForFD(self, fd, readReady, writeReady, errorReady):
+  def __handleEventForFD(self, fd, readReady, writeReady, errorReady):
     if fd in self.__fdToAsyncSocket:
       asyncSocket = self.__fdToAsyncSocket[fd]
       if (readReady):
@@ -514,7 +526,7 @@ class AbstractAsyncIOService(metaclass = abc.ABCMeta):
       if (errorReady):
         asyncSocket.handleErrorReady()
 
-class EPollAsyncIOService(AbstractAsyncIOService):
+class _EPollPoller(_AbstractPoller):
 
   @staticmethod
   def isAvailable():
@@ -525,7 +537,7 @@ class EPollAsyncIOService(AbstractAsyncIOService):
     self.__poller = select.epoll()
 
   def __str__(self):
-    return ('EPollAsyncIOService [ fileno = {0} ]'.format(self.__poller.fileno()))
+    return ('EPollPoller [ fileno = {0} ]'.format(self.__poller.fileno()))
 
   def registerForEvents(self, asyncSocket, readEvents, writeEvents):
     fileno = asyncSocket.fileno()
@@ -553,19 +565,19 @@ class EPollAsyncIOService(AbstractAsyncIOService):
   def __poll(self, block):
     return self.__poller.poll(-1 if block else 0)
 
-  def doPoll(self, block):
+  def poll(self, block, eventCallback):
     readyList = self.__poll(block = block)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.EPOLLIN) != 0)
       writeReady = ((eventMask & select.EPOLLOUT) != 0)
       errorReady = ((eventMask & 
                      (select.EPOLLERR | select.EPOLLHUP)) != 0)
-      self.handleEventForFD(fd = fd,
-                            readReady = readReady,
-                            writeReady = writeReady,
-                            errorReady = errorReady)
+      eventCallback(fd = fd,
+                    readReady = readReady,
+                    writeReady = writeReady,
+                    errorReady = errorReady)
 
-class KQueueAsyncIOService(AbstractAsyncIOService):
+class _KQueuePoller(_AbstractPoller):
 
   @staticmethod
   def isAvailable():
@@ -574,9 +586,10 @@ class KQueueAsyncIOService(AbstractAsyncIOService):
   def __init__(self):
     super().__init__()
     self.__kqueue = select.kqueue()
+    self.__numFDs = 0
 
   def __str__(self):
-    return ('KQueueAsyncIOService [ fileno = {0} ]'.format(self.__kqueue.fileno()))
+    return ('KQueuePoller [ fileno = {0} ]'.format(self.__kqueue.fileno()))
 
   @_signalSafe
   def __controlKqueue(self, changeList, maxEvents = 0, timeout = 0):
@@ -601,6 +614,7 @@ class KQueueAsyncIOService(AbstractAsyncIOService):
                               filter = select.KQ_FILTER_WRITE,
                               flags = (select.KQ_EV_ADD | select.KQ_EV_DISABLE))
     self.__controlKqueue(changeList = [readKE, writeKE])
+    self.__numFDs += 1
 
   def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
     fileno = asyncSocket.fileno()
@@ -631,23 +645,24 @@ class KQueueAsyncIOService(AbstractAsyncIOService):
                             filter = select.KQ_FILTER_WRITE,
                             flags = select.KQ_EV_DELETE)
     self.__controlKqueue(changeList = [readKE, writeKE])
+    self.__numFDs -= 1
 
-  def doPoll(self, block):
+  def poll(self, block, eventCallback):
     eventList = self.__controlKqueue(
                   changeList = None,
-                  maxEvents = (self.getNumFDs() * 2),
+                  maxEvents = (self.__numFDs * 2),
                   timeout = (None if block else 0))
     for ke in eventList:
       fd = ke.ident
       readReady = (ke.filter == select.KQ_FILTER_READ)
       writeReady = (ke.filter == select.KQ_FILTER_WRITE)
       errorReady = ((ke.flags & select.KQ_EV_EOF) != 0)
-      self.handleEventForFD(fd = fd,
-                            readReady = readReady,
-                            writeReady = writeReady,
-                            errorReady = errorReady)
+      eventCallback(fd = fd,
+                    readReady = readReady,
+                    writeReady = writeReady,
+                    errorReady = errorReady)
 
-class PollAsyncIOService(AbstractAsyncIOService):
+class _PollPoller(_AbstractPoller):
 
   @staticmethod
   def isAvailable():
@@ -658,7 +673,7 @@ class PollAsyncIOService(AbstractAsyncIOService):
     self.__poller = select.poll()
 
   def __str__(self):
-    return 'PollAsyncIOService'
+    return 'PollPoller'
 
   def registerForEvents(self, asyncSocket, readEvents, writeEvents):
     fileno = asyncSocket.fileno()
@@ -686,46 +701,55 @@ class PollAsyncIOService(AbstractAsyncIOService):
   def __poll(self, block):
     return self.__poller.poll(None if block else 0)
 
-  def doPoll(self, block):
+  def poll(self, block, eventCallback):
     readyList = self.__poll(block)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.POLLIN) != 0)
       writeReady = ((eventMask & select.POLLOUT) != 0)
       errorReady = ((eventMask & 
                      (select.POLLERR | select.POLLHUP | select.POLLNVAL)) != 0)
-      self.handleEventForFD(fd = fd,
-                            readReady = readReady,
-                            writeReady = writeReady,
-                            errorReady = errorReady)
+      eventCallback(fd = fd,
+                    readReady = readReady,
+                    writeReady = writeReady,
+                    errorReady = errorReady)
 
-class SelectAsyncIOService(AbstractAsyncIOService):
+class _SelectPoller(_AbstractPoller):
 
   def __init__(self):
     super().__init__()
+    self.__readFDSet = set()
+    self.__writeFDSet = set()
 
   def __str__(self):
-    return 'SelectAsyncIOService'
+    return 'SelectPoller'
 
   def registerForEvents(self, asyncSocket, readEvents, writeEvents):
-    pass
+    self.modifyRegistrationForEvents(asyncSocket, readEvents, writeEvents)
 
   def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
-    pass
+    fileno = asyncSocket.fileno()
+    if readEvents:
+      self.__readFDSet.add(fileno)
+    else:
+      self.__readFDSet.discard(fileno)
+    if writeEvents:
+      self.__writeFDSet.add(fileno)
+    else:
+      self.__writeFDSet.discard(fileno)
 
   def unregisterForEvents(self, asyncSocket):
-    pass
+    fileno = asyncSocket.fileno()
+    self.__readFDSet.discard(fileno)
+    self.__writeFDSet.discard(fileno)
 
   @_signalSafe
-  def __poll(self, readFDSet, writeFDSet, allFDSet, block):
-    return select.select(readFDSet, writeFDSet, allFDSet, None if block else 0)
+  def __poll(self, allFDSet, block):
+    return select.select(
+      self.__readFDSet, self.__writeFDSet, allFDSet, None if block else 0)
 
-  def doPoll(self, block):
-    readFDSet = self.getReadFDSet()
-    writeFDSet = self.getWriteFDSet()
-    allFDSet = readFDSet | writeFDSet
+  def poll(self, block, eventCallback):
+    allFDSet = self.__readFDSet | self.__writeFDSet
     (readList, writeList, exceptList) = self.__poll(
-      readFDSet = readFDSet,
-      writeFDSet = writeFDSet,
       allFDSet = allFDSet,
       block = block)
     for fd in allFDSet:
@@ -733,21 +757,23 @@ class SelectAsyncIOService(AbstractAsyncIOService):
       writeReady = fd in writeList
       errorReady = fd in exceptList
       if (readReady or writeReady or errorReady):
-        self.handleEventForFD(fd = fd,
-                              readReady = readReady,
-                              writeReady = writeReady,
-                              errorReady = errorReady)
+        eventCallback(fd = fd,
+                      readReady = readReady,
+                      writeReady = writeReady,
+                      errorReady = errorReady)
 
 def createAsyncIOService(allow_epoll = True,
                          allow_kqueue = True,
                          allow_poll = True):
   '''Create an AsyncIOService supported by the platform and parameters.'''
 
-  if (allow_epoll and EPollAsyncIOService.isAvailable()):
-    return EPollAsyncIOService()
-  elif (allow_kqueue and KQueueAsyncIOService.isAvailable()):
-    return KQueueAsyncIOService()
-  elif (allow_poll and PollAsyncIOService.isAvailable()):
-    return PollAsyncIOService()
+  if (allow_epoll and _EPollPoller.isAvailable()):
+    poller = _EPollPoller()
+  elif (allow_kqueue and _KQueuePoller.isAvailable()):
+    poller = _KQueuePoller()
+  elif (allow_poll and _PollPoller.isAvailable()):
+    poller = _PollPoller()
   else:
-    return SelectAsyncIOService()
+    poller = _SelectPoller()
+
+  return AsyncIOService(poller = poller)
