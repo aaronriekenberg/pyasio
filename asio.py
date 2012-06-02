@@ -37,22 +37,6 @@ def _signalSafe(function):
           raise
   return wrapper
 
-@_signalSafe
-def _signalSafeAccept(s):
-  return s.accept()
-
-@_signalSafe
-def _signalSafeRecv(s, bufsize):
-  return s.recv(bufsize)
-
-@_signalSafe
-def _signalSafeSend(s, buf):
-  return s.send(buf)
-
-@_signalSafe
-def _signalSafeClose(s):
-  return s.close()
-
 class AsyncException(Exception):
 
   def __init__(self, value):
@@ -92,12 +76,16 @@ class AsyncSocket(object):
     def isComplete(self):
       return self.__complete
 
+    @_signalSafe
+    def __signalSafeAccept(self):
+      return self.__asyncSocket.getSocket().accept()
+
     def poll(self):
       if self.__complete:
         return
 
       try:
-        (newSocket, addr) = _signalSafeAccept(self.__asyncSocket.getSocket())
+        (newSocket, addr) = self.__signalSafeAccept()
         asyncSocket = AsyncSocket(self.__asyncIOService, newSocket)
         self.__setComplete(asyncSocket, 0)
       except EnvironmentError as e:
@@ -170,12 +158,16 @@ class AsyncSocket(object):
     def isComplete(self):
       return self.__complete
 
+    @_signalSafe
+    def __signalSafeRecv(self):
+      return self.__asyncSocket.getSocket().recv(self.__maxBytes)
+
     def poll(self):
       if self.__complete:
         return
 
       try:
-        data = _signalSafeRecv(self.__asyncSocket.getSocket(), self.__maxBytes)
+        data = self.__signalSafeRecv()
         self.__setComplete(data, 0)
       except EnvironmentError as e:
         if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
@@ -206,13 +198,17 @@ class AsyncSocket(object):
     def isComplete(self):
       return self.__complete
 
+    @_signalSafe
+    def __signalSafeSend(self):
+      return self.__asyncSocket.getSocket().send(self.__writeBuffer)
+
     def poll(self):
       if self.__complete:
         return
 
       writeWouldBlock = False
       try:
-        bytesSent = _signalSafeSend(self.__asyncSocket.getSocket(), self.__writeBuffer)
+        bytesSent = self.__signalSafeSend()
         self.__writeBuffer = self.__writeBuffer[bytesSent:]
         if (len(self.__writeBuffer) == 0):
           self.__setComplete(0)
@@ -341,6 +337,10 @@ class AsyncSocket(object):
         asyncSocket = self,
         callback = callback))
 
+  @_signalSafe
+  def __signalSafeClose(self):
+    self.__socket.close()
+
   def close(self):
     if self.__closed:
       return
@@ -357,7 +357,7 @@ class AsyncSocket(object):
       self.__writeOperation, error)
 
     self.__asyncIOService.removeAsyncSocket(self)
-    _signalSafeClose(self.__socket)
+    self.__signalSafeClose()
     self.__closed = True
 
   def handleErrorReady(self):
