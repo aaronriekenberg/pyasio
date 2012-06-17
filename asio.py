@@ -715,6 +715,10 @@ class _PollPoller(_AbstractPoller):
 
 class _SelectPoller(_AbstractPoller):
 
+  @staticmethod
+  def isAvailable():
+    return hasattr(select, 'poll')
+
   def __init__(self):
     super().__init__()
     self.__readFDSet = set()
@@ -762,18 +766,25 @@ class _SelectPoller(_AbstractPoller):
                       writeReady = writeReady,
                       errorReady = errorReady)
 
+_POLLER_CLASSES = [_EPollPoller, _KQueuePoller, _PollPoller, _SelectPoller]
+
 def createAsyncIOService(allow_epoll = True,
                          allow_kqueue = True,
                          allow_poll = True):
   '''Create an AsyncIOService supported by the platform and parameters.'''
 
-  if (allow_epoll and _EPollPoller.isAvailable()):
-    poller = _EPollPoller()
-  elif (allow_kqueue and _KQueuePoller.isAvailable()):
-    poller = _KQueuePoller()
-  elif (allow_poll and _PollPoller.isAvailable()):
-    poller = _PollPoller()
-  else:
-    poller = _SelectPoller()
+  pollerClassesToTry = list(_POLLER_CLASSES)
+  if not allow_epoll:
+    pollerClassesToTry.remove(_EPollPoller)
+  if not allow_kqueue:
+    pollerClassesToTry.remove(_KQueuePoller)
+  if not allow_poll:
+    pollerClassesToTry.remove(_PollPoller)
+
+  poller = None
+  for pollerClass in pollerClassesToTry:
+    if (pollerClass.isAvailable()):
+      poller = pollerClass()
+      break
 
   return AsyncIOService(poller = poller)
