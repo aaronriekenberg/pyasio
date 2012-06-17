@@ -717,7 +717,7 @@ class _SelectPoller(_AbstractPoller):
 
   @staticmethod
   def isAvailable():
-    return hasattr(select, 'poll')
+    return hasattr(select, 'select')
 
   def __init__(self):
     super().__init__()
