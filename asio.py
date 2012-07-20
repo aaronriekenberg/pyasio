@@ -381,14 +381,14 @@ class AsyncSocket(object):
     self.__writeOperation = self.__pollOperation(self.__writeOperation)
 
   def __pollOperation(self, operation):
-    if operation:
+    if operation is not None:
       operation.poll()
       if operation.isComplete():
         operation = None
     return operation
 
   def __sendErrorToOperation(self, operation, error):
-    if operation:
+    if operation is not None:
       operation.handleSocketError(error)
       if operation.isComplete():
         operation = None

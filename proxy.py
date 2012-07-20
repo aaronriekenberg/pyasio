@@ -134,7 +134,7 @@ class Acceptor(object):
                 self.__asyncSocket.fileno()))
 
   def __acceptCallback(self, asyncSocket, error):
-    if ((error == 0) and (asyncSocket != None)):
+    if ((error == 0) and (asyncSocket is not None)):
       logger.info('accept {0} -> {1} (fd={2})'.format(
                   asyncSocket.getpeername(),
                   asyncSocket.getsockname(),
