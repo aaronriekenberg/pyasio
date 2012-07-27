@@ -29,29 +29,30 @@ class Connection(object):
   def __init__(self, ioService, clientToProxySocket,
                remoteAddress, remotePort):
     super().__init__()
-    self.__writingToClient = False
-    self.__writingToRemote = False
     self.__clientToProxySocket = clientToProxySocket
     self.__clientToProxyString = '{0} -> {1}'.format(
       clientToProxySocket.getpeername(),
       clientToProxySocket.getsockname())
     self.__proxyToRemoteSocket = ioService.createAsyncSocket()
     self.__proxyToRemoteString = ''
+    self.__remoteAddress = remoteAddress
+    self.__remotePort = remotePort
+
+  def start(self):
     self.__proxyToRemoteSocket.asyncConnect(
-      (remoteAddress, remotePort), 
+      (self.__remoteAddress, self.__remotePort), 
       self.__connectCallback)
 
   def close(self):
-    if not self.__writingToClient:
-      if ((not self.__clientToProxySocket.closed()) and
-          (len(self.__clientToProxyString) > 0)):
+    if (not self.__clientToProxySocket.closed()):
+      if (len(self.__clientToProxyString) > 0):
         logger.info('disconnect {0} (fd={1})'.format(
                     self.__clientToProxyString,
                     self.__clientToProxySocket.fileno()))
       self.__clientToProxySocket.close()
-    if not self.__writingToRemote:
-      if ((not self.__proxyToRemoteSocket.closed()) and
-          (len(self.__proxyToRemoteString) > 0)):
+
+    if (not self.__proxyToRemoteSocket.closed()):
+      if (len(self.__proxyToRemoteString) > 0):
         logger.info('disconnect {0} (fd={1})'.format(
                     self.__proxyToRemoteString,
                     self.__proxyToRemoteSocket.fileno()))
@@ -83,7 +84,6 @@ class Connection(object):
     elif not data:
       self.close()
     else:
-      self.__writingToRemote = True
       self.__proxyToRemoteSocket.asyncWriteAll(data, self.__writeToRemoteCallback)
 
   def __readFromRemoteCallback(self, data, error):
@@ -94,11 +94,9 @@ class Connection(object):
     elif not data:
       self.close()
     else:
-      self.__writingToClient = True
       self.__clientToProxySocket.asyncWriteAll(data, self.__writeToClientCallback)
 
   def __writeToRemoteCallback(self, error):
-    self.__writingToRemote = False
     if self.__clientToProxySocket.closed():
       self.close()
     elif (error != 0):
@@ -107,7 +105,6 @@ class Connection(object):
       self.__clientToProxySocket.asyncRead(MAX_READ_BYTES, self.__readFromClientCallback)
 
   def __writeToClientCallback(self, error):
-    self.__writingToClient = False
     if self.__proxyToRemoteSocket.closed():
       self.close()
     elif (error != 0):
@@ -122,11 +119,15 @@ class Acceptor(object):
                remoteAddress, remotePort):
     super().__init__()
     self.__ioService = ioService
+    self.__localAddress = localAddress
+    self.__localPort = localPort
     self.__remoteAddress = remoteAddress
     self.__remotePort = remotePort
     self.__asyncSocket = ioService.createAsyncSocket();
+
+  def start(self):
     self.__asyncSocket.setReuseAddress()
-    self.__asyncSocket.bind((localAddress, localPort))
+    self.__asyncSocket.bind((self.__localAddress, self.__localPort))
     self.__asyncSocket.listen()
     self.__asyncSocket.asyncAccept(self.__acceptCallback)
     logger.info('listening on {0} (fd={1})'.format(
@@ -140,7 +141,8 @@ class Acceptor(object):
                   asyncSocket.getsockname(),
                   asyncSocket.fileno()))
       Connection(
-        self.__ioService, asyncSocket, self.__remoteAddress, self.__remotePort)
+        self.__ioService, asyncSocket,
+        self.__remoteAddress, self.__remotePort).start()
     self.__asyncSocket.asyncAccept(self.__acceptCallback)
 
 def parseAddrPortString(addrPortString):
@@ -167,7 +169,7 @@ def main():
              localAddress = localAddress,
              localPort = localPort,
              remoteAddress = remoteAddress,
-             remotePort = remotePort)
+             remotePort = remotePort).start()
   logger.info('remote address {0}'.format((remoteAddress, remotePort)))
   ioService.run()
 
