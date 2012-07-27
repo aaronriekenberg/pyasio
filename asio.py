@@ -766,25 +766,34 @@ class _SelectPoller(_AbstractPoller):
                       writeReady = writeReady,
                       errorReady = errorReady)
 
-_POLLER_CLASSES = [_EPollPoller, _KQueuePoller, _PollPoller, _SelectPoller]
-
 def createAsyncIOService(allow_epoll = True,
                          allow_kqueue = True,
-                         allow_poll = True):
+                         allow_poll = True,
+                         allow_select = True):
+
   '''Create an AsyncIOService supported by the platform and parameters.'''
 
-  pollerClassesToTry = list(_POLLER_CLASSES)
-  if not allow_epoll:
-    pollerClassesToTry.remove(_EPollPoller)
-  if not allow_kqueue:
-    pollerClassesToTry.remove(_KQueuePoller)
-  if not allow_poll:
-    pollerClassesToTry.remove(_PollPoller)
+  pollerClassesToTry = []
+
+  if allow_epoll:
+    pollerClassesToTry.append(_EPollPoller)
+
+  if allow_kqueue:
+    pollerClassesToTry.append(_KQueuePoller)
+
+  if allow_poll:
+    pollerClassesToTry.append(_PollPoller)
+
+  if allow_select:
+    pollerClassesToTry.append(_SelectPoller)
 
   poller = None
   for pollerClass in pollerClassesToTry:
-    if (pollerClass.isAvailable()):
+    if pollerClass.isAvailable():
       poller = pollerClass()
       break
+
+  if poller is None:
+    raise AsyncException('Unable to create poller')
 
   return AsyncIOService(poller = poller)
