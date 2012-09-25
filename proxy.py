@@ -165,7 +165,7 @@ def main():
   ioService = asio.createAsyncIOService()
   logger.info('ioService = {0}'.format(ioService))
   for (localAddress, localPort) in localAddressPortList:
-    Acceptor(ioService,
+    Acceptor(ioService = ioService,
              localAddress = localAddress,
              localPort = localPort,
              remoteAddress = remoteAddress,
