@@ -25,6 +25,7 @@ _READ_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
 _WRITE_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
 _INTERRUPTED_ERRNO = errno.EINTR
 _SOCKET_CLOSED_ERRNO = errno.EBADF
+_NO_ERROR_ERRNO = 0
 
 def _signalSafe(function):
   def wrapper(*args, **kwargs):
@@ -55,7 +56,7 @@ class ErrorObject(object):
     self.__stringValue = None
 
   def __bool__(self):
-    return (self.__errnoValue != 0)
+    return (self.__errnoValue != _NO_ERROR_ERRNO)
 
   def __str__(self):
     if (self.__stringValue is None):
@@ -63,7 +64,7 @@ class ErrorObject(object):
         os.strerror(self.__errnoValue), self.__errnoValue)
     return self.__stringValue
 
-_NO_ERROR_OBJECT = ErrorObject(errnoValue = 0)
+_NO_ERROR_OBJECT = ErrorObject(errnoValue = _NO_ERROR_ERRNO)
 
 class _AbstractAsyncOperation(metaclass = abc.ABCMeta):
 
