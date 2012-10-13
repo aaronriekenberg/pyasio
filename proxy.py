@@ -2,7 +2,6 @@
 
 import asio
 import logging
-import os
 import sys
 
 MAX_READ_BYTES = 256 * 1024
@@ -59,8 +58,8 @@ class Connection(object):
       self.__proxyToRemoteSocket.close()
 
   def __connectCallback(self, error):
-    if (error != 0):
-      logger.info('connect error \'{0}\''.format(os.strerror(error)))
+    if (error):
+      logger.info('connect error: {0}'.format(error))
       self.close()
     else:
       self.__proxyToRemoteString = '{0} -> {1}'.format(
@@ -79,7 +78,7 @@ class Connection(object):
   def __readFromClientCallback(self, data, error):
     if self.__proxyToRemoteSocket.closed():
       self.close()
-    elif (error != 0):
+    elif (error):
       self.close()
     elif not data:
       self.close()
@@ -89,7 +88,7 @@ class Connection(object):
   def __readFromRemoteCallback(self, data, error):
     if self.__clientToProxySocket.closed():
       self.close()
-    elif (error != 0):
+    elif (error):
       self.close()
     elif not data:
       self.close()
@@ -99,7 +98,7 @@ class Connection(object):
   def __writeToRemoteCallback(self, error):
     if self.__clientToProxySocket.closed():
       self.close()
-    elif (error != 0):
+    elif (error):
       self.close()
     else:
       self.__clientToProxySocket.asyncRead(MAX_READ_BYTES, self.__readFromClientCallback)
@@ -107,7 +106,7 @@ class Connection(object):
   def __writeToClientCallback(self, error):
     if self.__proxyToRemoteSocket.closed():
       self.close()
-    elif (error != 0):
+    elif (error):
       self.close()
     else:
       self.__proxyToRemoteSocket.asyncRead(MAX_READ_BYTES, self.__readFromRemoteCallback)
@@ -135,7 +134,7 @@ class Acceptor(object):
                 self.__asyncSocket.fileno()))
 
   def __acceptCallback(self, asyncSocket, error):
-    if ((error == 0) and (asyncSocket is not None)):
+    if ((not error) and (asyncSocket is not None)):
       logger.info('accept {0} -> {1} (fd={2})'.format(
                   asyncSocket.getpeername(),
                   asyncSocket.getsockname(),

@@ -2,6 +2,7 @@ import abc
 import collections
 import errno
 import functools
+import os
 import select
 import socket
 
@@ -46,6 +47,24 @@ class AsyncException(Exception):
   def __str__(self):
     return repr(self.__value)
 
+class ErrorObject(object):
+
+  def __init__(self, errnoValue):
+    super().__init__()
+    self.__errnoValue = errnoValue
+    self.__stringValue = None
+
+  def __bool__(self):
+    return (self.__errnoValue != 0)
+
+  def __str__(self):
+    if (self.__stringValue is None):
+      self.__stringValue = '{0} (errno={1})'.format(
+        os.strerror(self.__errnoValue), self.__errnoValue)
+    return self.__stringValue
+
+_NO_ERROR_OBJECT = ErrorObject(errnoValue = 0)
+
 class _AbstractAsyncOperation(metaclass = abc.ABCMeta):
 
   @abc.abstractmethod
@@ -57,7 +76,7 @@ class _AbstractAsyncOperation(metaclass = abc.ABCMeta):
     raise NotImplementedError
 
   @abc.abstractmethod
-  def handleSocketError(self, error):
+  def handleSocketError(self, errorObject):
     raise NotImplementedError
 
 class _AsyncAcceptOperation(_AbstractAsyncOperation):
@@ -83,22 +102,23 @@ class _AsyncAcceptOperation(_AbstractAsyncOperation):
     try:
       (newSocket, addr) = self.__signalSafeAccept()
       asyncSocket = AsyncSocket(self.__asyncIOService, newSocket)
-      self.__setComplete(asyncSocket, 0)
+      self.__setComplete(asyncSocket, _NO_ERROR_OBJECT)
     except EnvironmentError as e:
       if e.errno in _ACCEPT_WOULD_BLOCK_ERRNO_SET:
         self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
       else:
-        self.__setComplete(None, e.errno)
+        self.__setComplete(None, ErrorObject(errnoValue = e.errno))
 
-  def __setComplete(self, asyncSocket, error):
+  def __setComplete(self, asyncSocket, errorObject):
     if not self.__complete:
       self.__complete = True
       self.__asyncIOService.unregisterAsyncSocketForRead(self.__asyncSocket)
       self.__asyncIOService.invokeLater(
-        functools.partial(self.__callback, asyncSocket = asyncSocket, error = error))
+        functools.partial(self.__callback, asyncSocket = asyncSocket,
+                          error = errorObject))
 
-  def handleSocketError(self, error):
-    self.__setComplete(asyncSocket = None, error = error)
+  def handleSocketError(self, errorObject):
+    self.__setComplete(asyncSocket = None, errorObject = errorObject)
 
 class _AsyncConnectOperation(_AbstractAsyncOperation):
 
@@ -119,27 +139,27 @@ class _AsyncConnectOperation(_AbstractAsyncOperation):
       return
 
     if not self.__calledConnect:
-      error = self.__asyncSocket.getSocket().connect_ex(self.__address)
+      errnoValue = self.__asyncSocket.getSocket().connect_ex(self.__address)
       self.__calledConnect = True
-      if error in _CONNECT_WOULD_BLOCK_ERRNO_SET:
+      if errnoValue in _CONNECT_WOULD_BLOCK_ERRNO_SET:
         self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
       else:
-        self.__setComplete(error)
+        self.__setComplete(ErrorObject(errnoValue = errnoValue))
     else:
-      error = self.__asyncSocket.getSocket().getsockopt(
-              socket.SOL_SOCKET, socket.SO_ERROR)
-      if error not in _CONNECT_WOULD_BLOCK_ERRNO_SET:
-        self.__setComplete(error)
+      errnoValue = self.__asyncSocket.getSocket().getsockopt(
+                     socket.SOL_SOCKET, socket.SO_ERROR)
+      if errnoValue not in _CONNECT_WOULD_BLOCK_ERRNO_SET:
+        self.__setComplete(ErrorObject(errnoValue = errnoValue))
 
-  def __setComplete(self, error):
+  def __setComplete(self, errorObject):
     if not self.__complete:
       self.__complete = True
       self.__asyncIOService.unregisterAsyncSocketForWrite(self.__asyncSocket)
       self.__asyncIOService.invokeLater(
-        functools.partial(self.__callback, error = error))
+        functools.partial(self.__callback, error = errorObject))
 
-  def handleSocketError(self, error):
-    self.__setComplete(error)
+  def handleSocketError(self, errorObject):
+    self.__setComplete(errorObject)
 
 class _AsyncReadOperation(_AbstractAsyncOperation):
 
@@ -164,22 +184,22 @@ class _AsyncReadOperation(_AbstractAsyncOperation):
 
     try:
       data = self.__signalSafeRecv()
-      self.__setComplete(data, 0)
+      self.__setComplete(data, _NO_ERROR_OBJECT)
     except EnvironmentError as e:
       if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
         self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
       else:
-        self.__setComplete(None, e.errno)
+        self.__setComplete(None, ErrorObject(errnoValue = e.errno))
 
-  def __setComplete(self, data, error):
+  def __setComplete(self, data, errorObject):
     if not self.__complete:
       self.__complete = True
       self.__asyncIOService.unregisterAsyncSocketForRead(self.__asyncSocket)
       self.__asyncIOService.invokeLater(
-        functools.partial(self.__callback, data = data, error = error))
+        functools.partial(self.__callback, data = data, error = errorObject))
 
-  def handleSocketError(self, error):
-    self.__setComplete(data = None, error = error)
+  def handleSocketError(self, errorObject):
+    self.__setComplete(data = None, errorObject = errorObject)
 
 class _AsyncWriteAllOperation(_AbstractAsyncOperation):
 
@@ -207,27 +227,27 @@ class _AsyncWriteAllOperation(_AbstractAsyncOperation):
       bytesSent = self.__signalSafeSend()
       self.__writeBuffer = self.__writeBuffer[bytesSent:]
       if (len(self.__writeBuffer) == 0):
-        self.__setComplete(0)
+        self.__setComplete(_NO_ERROR_OBJECT)
       else:
         writeWouldBlock = True
     except EnvironmentError as e:
       if e.errno in _WRITE_WOULD_BLOCK_ERRNO_SET:
         writeWouldBlock = True
       else:
-        self.__setComplete(e.errno)
+        self.__setComplete(ErrorObject(errnoValue = e.errno))
 
     if (writeWouldBlock):
       self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
 
-  def __setComplete(self, error):
+  def __setComplete(self, errorObject):
     if not self.__complete:
       self.__complete = True
       self.__asyncIOService.unregisterAsyncSocketForWrite(self.__asyncSocket)
       self.__asyncIOService.invokeLater(
-        functools.partial(self.__callback, error = error))
+        functools.partial(self.__callback, error = errorObject))
 
-  def handleSocketError(self, error):
-    self.__setComplete(error)
+  def handleSocketError(self, errorObject):
+    self.__setComplete(errorObject)
 
 class AsyncSocket(object):
 
@@ -345,24 +365,25 @@ class AsyncSocket(object):
     if self.__closed:
       return
 
-    error = _SOCKET_CLOSED_ERRNO
+    errorObject = ErrorObject(errnoValue = _SOCKET_CLOSED_ERRNO)
 
     self.__acceptOperation = self.__sendErrorToOperation(
-      self.__acceptOperation, error)
+      self.__acceptOperation, errorObject)
     self.__connectOperation = self.__sendErrorToOperation(
-      self.__connectOperation, error)
+      self.__connectOperation, errorObject)
     self.__readOperation = self.__sendErrorToOperation(
-      self.__readOperation, error)
+      self.__readOperation, errorObject)
     self.__writeOperation = self.__sendErrorToOperation(
-      self.__writeOperation, error)
+      self.__writeOperation, errorObject)
 
     self.__asyncIOService.removeAsyncSocket(self)
     self.__signalSafeClose()
     self.__closed = True
 
   def handleErrorReady(self):
-    error = self.__socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-    if (error != 0):
+    error = ErrorObject(
+      errnoValue = self.__socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR))
+    if (error):
       self.__acceptOperation = self.__sendErrorToOperation(
         self.__acceptOperation, error)
       self.__connectOperation = self.__sendErrorToOperation(
@@ -387,9 +408,9 @@ class AsyncSocket(object):
         operation = None
     return operation
 
-  def __sendErrorToOperation(self, operation, error):
+  def __sendErrorToOperation(self, operation, errorObject):
     if operation is not None:
-      operation.handleSocketError(error)
+      operation.handleSocketError(errorObject)
       if operation.isComplete():
         operation = None
     return operation
