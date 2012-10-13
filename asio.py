@@ -46,192 +46,192 @@ class AsyncException(Exception):
   def __str__(self):
     return repr(self.__value)
 
+class _AbstractAsyncOperation(metaclass = abc.ABCMeta):
+
+  @abc.abstractmethod
+  def isComplete(self):
+    raise NotImplementedError
+
+  @abc.abstractmethod
+  def poll(self):
+    raise NotImplementedError
+
+  @abc.abstractmethod
+  def handleSocketError(self, error):
+    raise NotImplementedError
+
+class _AsyncAcceptOperation(_AbstractAsyncOperation):
+
+  def __init__(self, asyncSocket, callback):
+    super().__init__()
+    self.__asyncSocket = asyncSocket
+    self.__asyncIOService = asyncSocket.getAsyncIOService()
+    self.__callback = callback
+    self.__complete = False
+
+  def isComplete(self):
+    return self.__complete
+
+  @_signalSafe
+  def __signalSafeAccept(self):
+    return self.__asyncSocket.getSocket().accept()
+
+  def poll(self):
+    if self.__complete:
+      return
+
+    try:
+      (newSocket, addr) = self.__signalSafeAccept()
+      asyncSocket = AsyncSocket(self.__asyncIOService, newSocket)
+      self.__setComplete(asyncSocket, 0)
+    except EnvironmentError as e:
+      if e.errno in _ACCEPT_WOULD_BLOCK_ERRNO_SET:
+        self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
+      else:
+        self.__setComplete(None, e.errno)
+
+  def __setComplete(self, asyncSocket, error):
+    if not self.__complete:
+      self.__complete = True
+      self.__asyncIOService.unregisterAsyncSocketForRead(self.__asyncSocket)
+      self.__asyncIOService.invokeLater(
+        functools.partial(self.__callback, asyncSocket = asyncSocket, error = error))
+
+  def handleSocketError(self, error):
+    self.__setComplete(asyncSocket = None, error = error)
+
+class _AsyncConnectOperation(_AbstractAsyncOperation):
+
+  def __init__(self, address, asyncSocket, callback):
+    super().__init__()
+    self.__address = address
+    self.__asyncSocket = asyncSocket
+    self.__asyncIOService = asyncSocket.getAsyncIOService()
+    self.__callback = callback
+    self.__complete = False
+    self.__calledConnect = False
+
+  def isComplete(self):
+    return self.__complete
+
+  def poll(self):
+    if self.__complete:
+      return
+
+    if not self.__calledConnect:
+      error = self.__asyncSocket.getSocket().connect_ex(self.__address)
+      self.__calledConnect = True
+      if error in _CONNECT_WOULD_BLOCK_ERRNO_SET:
+        self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
+      else:
+        self.__setComplete(error)
+    else:
+      error = self.__asyncSocket.getSocket().getsockopt(
+              socket.SOL_SOCKET, socket.SO_ERROR)
+      if error not in _CONNECT_WOULD_BLOCK_ERRNO_SET:
+        self.__setComplete(error)
+
+  def __setComplete(self, error):
+    if not self.__complete:
+      self.__complete = True
+      self.__asyncIOService.unregisterAsyncSocketForWrite(self.__asyncSocket)
+      self.__asyncIOService.invokeLater(
+        functools.partial(self.__callback, error = error))
+
+  def handleSocketError(self, error):
+    self.__setComplete(error)
+
+class _AsyncReadOperation(_AbstractAsyncOperation):
+
+  def __init__(self, maxBytes, asyncSocket, callback):
+    super().__init__()
+    self.__maxBytes = maxBytes
+    self.__asyncSocket = asyncSocket
+    self.__asyncIOService = asyncSocket.getAsyncIOService()
+    self.__callback = callback
+    self.__complete = False
+
+  def isComplete(self):
+    return self.__complete
+
+  @_signalSafe
+  def __signalSafeRecv(self):
+    return self.__asyncSocket.getSocket().recv(self.__maxBytes)
+
+  def poll(self):
+    if self.__complete:
+      return
+
+    try:
+      data = self.__signalSafeRecv()
+      self.__setComplete(data, 0)
+    except EnvironmentError as e:
+      if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
+        self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
+      else:
+        self.__setComplete(None, e.errno)
+
+  def __setComplete(self, data, error):
+    if not self.__complete:
+      self.__complete = True
+      self.__asyncIOService.unregisterAsyncSocketForRead(self.__asyncSocket)
+      self.__asyncIOService.invokeLater(
+        functools.partial(self.__callback, data = data, error = error))
+
+  def handleSocketError(self, error):
+    self.__setComplete(data = None, error = error)
+
+class _AsyncWriteAllOperation(_AbstractAsyncOperation):
+
+  def __init__(self, writeBuffer, asyncSocket, callback):
+    super().__init__()
+    self.__writeBuffer = writeBuffer
+    self.__asyncSocket = asyncSocket
+    self.__asyncIOService = asyncSocket.getAsyncIOService()
+    self.__callback = callback
+    self.__complete = False
+
+  def isComplete(self):
+    return self.__complete
+
+  @_signalSafe
+  def __signalSafeSend(self):
+    return self.__asyncSocket.getSocket().send(self.__writeBuffer)
+
+  def poll(self):
+    if self.__complete:
+      return
+
+    writeWouldBlock = False
+    try:
+      bytesSent = self.__signalSafeSend()
+      self.__writeBuffer = self.__writeBuffer[bytesSent:]
+      if (len(self.__writeBuffer) == 0):
+        self.__setComplete(0)
+      else:
+        writeWouldBlock = True
+    except EnvironmentError as e:
+      if e.errno in _WRITE_WOULD_BLOCK_ERRNO_SET:
+        writeWouldBlock = True
+      else:
+        self.__setComplete(e.errno)
+
+    if (writeWouldBlock):
+      self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
+
+  def __setComplete(self, error):
+    if not self.__complete:
+      self.__complete = True
+      self.__asyncIOService.unregisterAsyncSocketForWrite(self.__asyncSocket)
+      self.__asyncIOService.invokeLater(
+        functools.partial(self.__callback, error = error))
+
+  def handleSocketError(self, error):
+    self.__setComplete(error)
+
 class AsyncSocket(object):
 
   '''Socket class supporting asynchronous operations.'''
-
-  class AbstractOperation(metaclass = abc.ABCMeta):
-
-    @abc.abstractmethod
-    def isComplete(self):
-      raise NotImplementedError
-
-    @abc.abstractmethod
-    def poll(self):
-      raise NotImplementedError
-
-    @abc.abstractmethod
-    def handleSocketError(self, error):
-      raise NotImplementedError
-
-  class AcceptOperation(AbstractOperation):
-
-    def __init__(self, asyncSocket, callback):
-      super().__init__()
-      self.__asyncSocket = asyncSocket
-      self.__asyncIOService = asyncSocket.getAsyncIOService()
-      self.__callback = callback
-      self.__complete = False
-
-    def isComplete(self):
-      return self.__complete
-
-    @_signalSafe
-    def __signalSafeAccept(self):
-      return self.__asyncSocket.getSocket().accept()
-
-    def poll(self):
-      if self.__complete:
-        return
-
-      try:
-        (newSocket, addr) = self.__signalSafeAccept()
-        asyncSocket = AsyncSocket(self.__asyncIOService, newSocket)
-        self.__setComplete(asyncSocket, 0)
-      except EnvironmentError as e:
-        if e.errno in _ACCEPT_WOULD_BLOCK_ERRNO_SET:
-          self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
-        else:
-          self.__setComplete(None, e.errno)
-
-    def __setComplete(self, asyncSocket, error):
-      if not self.__complete:
-        self.__complete = True
-        self.__asyncIOService.unregisterAsyncSocketForRead(self.__asyncSocket)
-        self.__asyncIOService.invokeLater(
-          functools.partial(self.__callback, asyncSocket = asyncSocket, error = error))
-
-    def handleSocketError(self, error):
-      self.__setComplete(asyncSocket = None, error = error)
-
-  class ConnectOperation(AbstractOperation):
-
-    def __init__(self, address, asyncSocket, callback):
-      super().__init__()
-      self.__address = address
-      self.__asyncSocket = asyncSocket
-      self.__asyncIOService = asyncSocket.getAsyncIOService()
-      self.__callback = callback
-      self.__complete = False
-      self.__calledConnect = False
-
-    def isComplete(self):
-      return self.__complete
-
-    def poll(self):
-      if self.__complete:
-        return
-
-      if not self.__calledConnect:
-        error = self.__asyncSocket.getSocket().connect_ex(self.__address)
-        self.__calledConnect = True
-        if error in _CONNECT_WOULD_BLOCK_ERRNO_SET:
-          self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
-        else:
-          self.__setComplete(error)
-      else:
-        error = self.__asyncSocket.getSocket().getsockopt(
-                socket.SOL_SOCKET, socket.SO_ERROR)
-        if error not in _CONNECT_WOULD_BLOCK_ERRNO_SET:
-          self.__setComplete(error)
-
-    def __setComplete(self, error):
-      if not self.__complete:
-        self.__complete = True
-        self.__asyncIOService.unregisterAsyncSocketForWrite(self.__asyncSocket)
-        self.__asyncIOService.invokeLater(
-          functools.partial(self.__callback, error = error))
-
-    def handleSocketError(self, error):
-      self.__setComplete(error)
-
-  class ReadOperation(AbstractOperation):
-
-    def __init__(self, maxBytes, asyncSocket, callback):
-      super().__init__()
-      self.__maxBytes = maxBytes
-      self.__asyncSocket = asyncSocket
-      self.__asyncIOService = asyncSocket.getAsyncIOService()
-      self.__callback = callback
-      self.__complete = False
-
-    def isComplete(self):
-      return self.__complete
-
-    @_signalSafe
-    def __signalSafeRecv(self):
-      return self.__asyncSocket.getSocket().recv(self.__maxBytes)
-
-    def poll(self):
-      if self.__complete:
-        return
-
-      try:
-        data = self.__signalSafeRecv()
-        self.__setComplete(data, 0)
-      except EnvironmentError as e:
-        if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
-          self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
-        else:
-          self.__setComplete(None, e.errno)
-
-    def __setComplete(self, data, error):
-      if not self.__complete:
-        self.__complete = True
-        self.__asyncIOService.unregisterAsyncSocketForRead(self.__asyncSocket)
-        self.__asyncIOService.invokeLater(
-          functools.partial(self.__callback, data = data, error = error))
-
-    def handleSocketError(self, error):
-      self.__setComplete(data = None, error = error)
-
-  class WriteAllOperation(AbstractOperation):
-
-    def __init__(self, writeBuffer, asyncSocket, callback):
-      super().__init__()
-      self.__writeBuffer = writeBuffer
-      self.__asyncSocket = asyncSocket
-      self.__asyncIOService = asyncSocket.getAsyncIOService()
-      self.__callback = callback
-      self.__complete = False
-
-    def isComplete(self):
-      return self.__complete
-
-    @_signalSafe
-    def __signalSafeSend(self):
-      return self.__asyncSocket.getSocket().send(self.__writeBuffer)
-
-    def poll(self):
-      if self.__complete:
-        return
-
-      writeWouldBlock = False
-      try:
-        bytesSent = self.__signalSafeSend()
-        self.__writeBuffer = self.__writeBuffer[bytesSent:]
-        if (len(self.__writeBuffer) == 0):
-          self.__setComplete(0)
-        else:
-          writeWouldBlock = True
-      except EnvironmentError as e:
-        if e.errno in _WRITE_WOULD_BLOCK_ERRNO_SET:
-          writeWouldBlock = True
-        else:
-          self.__setComplete(e.errno)
-
-      if (writeWouldBlock):
-        self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
-
-    def __setComplete(self, error):
-      if not self.__complete:
-        self.__complete = True
-        self.__asyncIOService.unregisterAsyncSocketForWrite(self.__asyncSocket)
-        self.__asyncIOService.invokeLater(
-          functools.partial(self.__callback, error = error))
-
-    def handleSocketError(self, error):
-      self.__setComplete(error)
 
   def __init__(self, asyncIOService, sock = None):
     super().__init__()
@@ -306,7 +306,7 @@ class AsyncSocket(object):
     self.__verifyStateForNewOperation()
 
     self.__connectOperation = self.__pollOperation(
-      AsyncSocket.ConnectOperation(
+      _AsyncConnectOperation(
         address = address,
         asyncSocket = self,
         callback = callback))
@@ -315,7 +315,7 @@ class AsyncSocket(object):
     self.__verifyStateForNewOperation()
 
     self.__acceptOperation = self.__pollOperation(
-      AsyncSocket.AcceptOperation(
+      _AsyncAcceptOperation(
         asyncSocket = self,
         callback = callback))
 
@@ -323,7 +323,7 @@ class AsyncSocket(object):
     self.__verifyStateForNewOperation(ignoreInProgressWrite = True)
 
     self.__readOperation = self.__pollOperation(
-      AsyncSocket.ReadOperation(
+      _AsyncReadOperation(
         maxBytes = maxBytes,
         asyncSocket = self,
         callback = callback))
@@ -332,7 +332,7 @@ class AsyncSocket(object):
     self.__verifyStateForNewOperation(ignoreInProgressRead = True)
 
     self.__writeOperation = self.__pollOperation(
-      AsyncSocket.WriteAllOperation(
+      _AsyncWriteAllOperation(
         writeBuffer = writeBuffer,
         asyncSocket = self,
         callback = callback))
