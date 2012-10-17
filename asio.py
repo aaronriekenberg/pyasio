@@ -545,6 +545,9 @@ class AsyncIOService(object):
         event = self.__eventQueue.popleft()
         event()
         eventsProcessed += 1
+      # Set event to None so we don't hang on to a reference to event during the
+      # potentially long-running poll below.
+      event = None
 
       if ((len(self.__eventQueue) == 0) and
           (len(self.__fdsRegisteredForRead) == 0) and
