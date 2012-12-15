@@ -562,8 +562,8 @@ class AsyncIOService(object):
         eventCallback = self.__handleEventForFD)
 
   def __handleEventForFD(self, fd, readReady, writeReady, errorReady):
-    if fd in self.__fdToAsyncSocket:
-      asyncSocket = self.__fdToAsyncSocket[fd]
+    asyncSocket = self.__fdToAsyncSocket.get(fd)
+    if asyncSocket is not None:
       if (readReady):
         asyncSocket.handleReadReady()
       if (writeReady):
