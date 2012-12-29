@@ -22,6 +22,8 @@ import abc
 import collections
 import errno
 import functools
+import heapq
+import itertools
 import os
 import select
 import socket
@@ -453,14 +455,65 @@ class _AsyncTimer(object):
     self.__callbackFired = False
     self.__asyncIOService = asyncIOService
 
-  def getAbsoluteTimeoutTimeSeconds(self):
+  def _getAbsoluteTimeoutTimeSeconds(self):
     return self.__absoluteTimeoutTimeSeconds
 
-  def fireCallback(self):
+  def _fireCallback(self):
     if not self.__callbackFired:
       self.__callbackFired = True
       self.__asyncIOService._invokeLater(self.__callback)
 
+class _AsyncTimerService(object):
+
+  def __init__(self, asyncIOService):
+    super().__init__()
+    self.__asyncIOService = asyncIOService
+    self.__asyncTimerHeap = []
+    self.__heapCounter = itertools.count()
+
+  def __peekAtEarliestTimer(self):
+    if (len(self.__asyncTimerHeap) > 0):
+      (timeoutTimeSeconds, counter, timer) = self.__asyncTimerHeap[0]
+      return timer
+    else:
+      return None
+
+  def __removeEarliestTimer(self):
+    if (len(self.__asyncTimerHeap) > 0):
+      heapq.heappop(self.__asyncTimerHeap)
+
+  def _scheduleTimer(self, deltaTimeSeconds, callback):
+    timer = _AsyncTimer(deltaTimeSeconds, callback, self.__asyncIOService)
+
+    # 3-tuple idea borrowed from http://docs.python.org/3/library/heapq.html
+    heapTuple = (timer._getAbsoluteTimeoutTimeSeconds(),
+                 next(self.__heapCounter), timer)
+    heapq.heappush(self.__asyncTimerHeap, heapTuple)
+
+  def _getNumPendingTimers(self):
+    return len(self.__asyncTimerHeap)
+
+  def _getEarliestTimeoutDeltaSeconds(self):
+    earliestTimer = self.__peekAtEarliestTimer()
+    if (earliestTimer is None):
+      # default to one minute in the future if no timers are set
+      return 60
+    else:
+      # return delta time to earliest timer
+      delta = (earliestTimer._getAbsoluteTimeoutTimeSeconds() - time.time())
+      if (delta < 0):
+        delta = 0
+      return delta
+
+  def _firePendingTimers(self):
+    done = False
+    while ((self._getNumPendingTimers() > 0) and (not done)):
+      earliestTimer = self.__peekAtEarliestTimer()
+      if (time.time() < earliestTimer._getAbsoluteTimeoutTimeSeconds()):
+        done = True
+      else:
+        self.__removeEarliestTimer()
+        earliestTimer._fireCallback()
 
 class _AbstractPoller(metaclass = abc.ABCMeta):
 
@@ -495,8 +548,8 @@ class AsyncIOService(object):
     self.__fdToAsyncSocket = {}
     self.__fdsRegisteredForRead = set()
     self.__fdsRegisteredForWrite = set()
-    self.__asyncTimerList = []
     self.__eventQueue = collections.deque()
+    self.__asyncTimerService = _AsyncTimerService(self)
 
   def __str__(self):
     return 'AsyncIOService [ poller = ' + str(self.__poller) + ' ]'
@@ -505,31 +558,8 @@ class AsyncIOService(object):
     return AsyncSocket(asyncIOService = self)
 
   def scheduleTimer(self, deltaTimeSeconds, callback):
-    timer = _AsyncTimer(deltaTimeSeconds, callback, self)
-    self.__asyncTimerList.append(timer)
-    self.__asyncTimerList.sort(key = _AsyncTimer.getAbsoluteTimeoutTimeSeconds)
-
-  def _getEarliestTimeoutDeltaSeconds(self):
-    if (len(self.__asyncTimerList) == 0):
-      # default to one hour in the future if no timers are set
-      return 3600
-    else:
-      # return delta time to earliest timer
-      delta = (self.__asyncTimerList[0].getAbsoluteTimeoutTimeSeconds() -
-               time.time())
-      if (delta < 0):
-        delta = 0
-      return delta
-
-  def _firePendingTimers(self):
-    done = False
-    while ((len(self.__asyncTimerList) > 0) and (not done)):
-      earliestTimer = self.__asyncTimerList[0]
-      if (time.time() < earliestTimer.getAbsoluteTimeoutTimeSeconds()):
-        done = True
-      else:
-        self.__asyncTimerList.pop(0)
-        earliestTimer.fireCallback()
+    self.__asyncTimerService._scheduleTimer(
+      deltaTimeSeconds = deltaTimeSeconds, callback = callback)
 
   def _addAsyncSocket(self, asyncSocket):
     self.__fdToAsyncSocket[asyncSocket.fileno()] = asyncSocket
@@ -609,7 +639,7 @@ class AsyncIOService(object):
       event = None
 
       if ((len(self.__eventQueue) == 0) and
-          (len(self.__asyncTimerList) == 0) and
+          (self.__asyncTimerService._getNumPendingTimers() == 0) and
           (len(self.__fdsRegisteredForRead) == 0) and
           (len(self.__fdsRegisteredForWrite) == 0)):
         break
@@ -617,12 +647,13 @@ class AsyncIOService(object):
       block = True
       if (len(self.__eventQueue) > 0):
         block = False
+      blockSeconds = self.__asyncTimerService._getEarliestTimeoutDeltaSeconds()
       self.__poller._poll(
         block = block,
-        blockSeconds = self._getEarliestTimeoutDeltaSeconds(),
+        blockSeconds = blockSeconds,
         eventCallback = self.__handleEventForFD)
 
-      self._firePendingTimers()
+      self.__asyncTimerService._firePendingTimers()
 
   def __handleEventForFD(self, fd, readReady, writeReady, errorReady):
     asyncSocket = self.__fdToAsyncSocket.get(fd)
