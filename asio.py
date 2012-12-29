@@ -26,6 +26,7 @@ import os
 import select
 import socket
 import sys
+import time
 
 '''Asynchronous socket service inspired by the basic design of Boost ASIO.
 
@@ -443,6 +444,24 @@ class AsyncSocket(object):
         operation = None
     return operation
 
+class _AsyncTimer(object):
+
+  def __init__(self, deltaTimeSeconds, callback, asyncIOService):
+    super().__init__()
+    self.__absoluteTimeoutTimeSeconds = time.time() + deltaTimeSeconds
+    self.__callback = callback
+    self.__callbackFired = False
+    self.__asyncIOService = asyncIOService
+
+  def getAbsoluteTimeoutTimeSeconds(self):
+    return self.__absoluteTimeoutTimeSeconds
+
+  def fireCallback(self):
+    if not self.__callbackFired:
+      self.__callbackFired = True
+      self.__asyncIOService._invokeLater(self.__callback)
+
+
 class _AbstractPoller(metaclass = abc.ABCMeta):
 
   @staticmethod
@@ -463,7 +482,7 @@ class _AbstractPoller(metaclass = abc.ABCMeta):
     raise NotImplementedError
 
   @abc.abstractmethod
-  def _poll(self, block, eventCallback):
+  def _poll(self, block, blockSeconds, eventCallback):
     raise NotImplementedError
 
 class AsyncIOService(object):
@@ -476,6 +495,7 @@ class AsyncIOService(object):
     self.__fdToAsyncSocket = {}
     self.__fdsRegisteredForRead = set()
     self.__fdsRegisteredForWrite = set()
+    self.__asyncTimerList = []
     self.__eventQueue = collections.deque()
 
   def __str__(self):
@@ -483,6 +503,33 @@ class AsyncIOService(object):
 
   def createAsyncSocket(self):
     return AsyncSocket(asyncIOService = self)
+
+  def scheduleTimer(self, deltaTimeSeconds, callback):
+    timer = _AsyncTimer(deltaTimeSeconds, callback, self)
+    self.__asyncTimerList.append(timer)
+    self.__asyncTimerList.sort(key = _AsyncTimer.getAbsoluteTimeoutTimeSeconds)
+
+  def _getEarliestTimeoutDeltaSeconds(self):
+    if (len(self.__asyncTimerList) == 0):
+      # default to one hour in the future if no timers are set
+      return 3600
+    else:
+      # return delta time to earliest timer
+      delta = (self.__asyncTimerList[0].getAbsoluteTimeoutTimeSeconds() -
+               time.time())
+      if (delta < 0):
+        delta = 0
+      return delta
+
+  def _firePendingTimers(self):
+    done = False
+    while ((len(self.__asyncTimerList) > 0) and (not done)):
+      earliestTimer = self.__asyncTimerList[0]
+      if (time.time() < earliestTimer.getAbsoluteTimeoutTimeSeconds()):
+        done = True
+      else:
+        self.__asyncTimerList.pop(0)
+        earliestTimer.fireCallback()
 
   def _addAsyncSocket(self, asyncSocket):
     self.__fdToAsyncSocket[asyncSocket.fileno()] = asyncSocket
@@ -562,6 +609,7 @@ class AsyncIOService(object):
       event = None
 
       if ((len(self.__eventQueue) == 0) and
+          (len(self.__asyncTimerList) == 0) and
           (len(self.__fdsRegisteredForRead) == 0) and
           (len(self.__fdsRegisteredForWrite) == 0)):
         break
@@ -571,7 +619,10 @@ class AsyncIOService(object):
         block = False
       self.__poller._poll(
         block = block,
+        blockSeconds = self._getEarliestTimeoutDeltaSeconds(),
         eventCallback = self.__handleEventForFD)
+
+      self._firePendingTimers()
 
   def __handleEventForFD(self, fd, readReady, writeReady, errorReady):
     asyncSocket = self.__fdToAsyncSocket.get(fd)
@@ -616,11 +667,13 @@ class _EPollPoller(_AbstractPoller):
     self.__poller.unregister(fileno)
 
   @_signalSafe
-  def __poll(self, block):
-    return self.__poller.poll(-1 if block else 0)
+  def __poll(self, block, blockSeconds):
+    return self.__poller.poll(blockSeconds if block else 0)
 
-  def _poll(self, block, eventCallback):
-    readyList = self.__poll(block = block)
+  def _poll(self, block, blockSeconds, eventCallback):
+    readyList = self.__poll(
+                  block = block,
+                  blockSeconds = blockSeconds)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.EPOLLIN) != 0)
       writeReady = ((eventMask & select.EPOLLOUT) != 0)
@@ -698,10 +751,10 @@ class _KQueuePoller(_AbstractPoller):
     self.__controlKqueue(changeList = [readKE, writeKE])
     self.__numFDs -= 1
 
-  def _poll(self, block, eventCallback):
+  def _poll(self, block, blockSeconds, eventCallback):
     eventList = self.__controlKqueue(
                   maxEvents = (self.__numFDs * 2),
-                  timeout = (None if block else 0))
+                  timeout = (blockSeconds if block else 0))
     for ke in eventList:
       fd = ke.ident
       readReady = (ke.filter == select.KQ_FILTER_READ)
@@ -745,11 +798,11 @@ class _PollPoller(_AbstractPoller):
     self.__poller.unregister(fileno)
 
   @_signalSafe
-  def __poll(self, block):
-    return self.__poller.poll(None if block else 0)
+  def __poll(self, block, blockSeconds):
+    return self.__poller.poll(int(blockSeconds * 1000) if block else 0)
 
-  def _poll(self, block, eventCallback):
-    readyList = self.__poll(block)
+  def _poll(self, block, blockSeconds, eventCallback):
+    readyList = self.__poll(block = block, blockSeconds = blockSeconds)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.POLLIN) != 0)
       writeReady = ((eventMask & select.POLLOUT) != 0)
@@ -792,15 +845,17 @@ class _SelectPoller(_AbstractPoller):
     self.__writeFDSet.discard(fileno)
 
   @_signalSafe
-  def __poll(self, allFDSet, block):
+  def __poll(self, allFDSet, block, blockSeconds):
     return select.select(
-      self.__readFDSet, self.__writeFDSet, allFDSet, None if block else 0)
+      self.__readFDSet, self.__writeFDSet, allFDSet,
+      blockSeconds if block else 0)
 
-  def _poll(self, block, eventCallback):
+  def _poll(self, block, blockSeconds, eventCallback):
     allFDSet = self.__readFDSet | self.__writeFDSet
     (readList, writeList, exceptList) = self.__poll(
       allFDSet = allFDSet,
-      block = block)
+      block = block,
+      blockSeconds = blockSeconds)
     for fd in allFDSet:
       readReady = fd in readList
       writeReady = fd in writeList

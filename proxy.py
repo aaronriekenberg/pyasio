@@ -48,6 +48,7 @@ class Connection(object):
   def __init__(self, ioService, clientToProxySocket,
                remoteAddress, remotePort):
     super().__init__()
+    self.__ioService = ioService
     self.__clientToProxySocket = clientToProxySocket
     self.__clientToProxyString = '{0} -> {1}'.format(
       clientToProxySocket.getpeername(),
@@ -56,11 +57,16 @@ class Connection(object):
     self.__proxyToRemoteString = ''
     self.__remoteAddress = remoteAddress
     self.__remotePort = remotePort
+    self.__connectComplete = False
+    self.__connectTimedout = False
 
   def start(self):
     self.__proxyToRemoteSocket.asyncConnect(
       (self.__remoteAddress, self.__remotePort), 
       self.__connectCallback)
+    self.__ioService.scheduleTimer(
+      deltaTimeSeconds = 5,
+      callback = self.__connectTimeoutTimerPop)
 
   def close(self):
     if (not self.__clientToProxySocket.closed()):
@@ -77,8 +83,17 @@ class Connection(object):
                     self.__proxyToRemoteSocket.fileno()))
       self.__proxyToRemoteSocket.close()
 
+  def __connectTimeoutTimerPop(self):
+    if not self.__connectComplete:
+      logger.info('connect timed out')
+      self.__connectTimedout = True
+      self.close()
+
   def __connectCallback(self, error):
-    if (error):
+    self.__connectComplete = True
+    if (self.__connectTimedout):
+      self.close()
+    elif (error):
       logger.info('connect error: {0}'.format(error))
       self.close()
     else:
