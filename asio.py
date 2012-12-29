@@ -451,15 +451,15 @@ class _AbstractPoller(metaclass = abc.ABCMeta):
     raise NotImplementedError
 
   @abc.abstractmethod
-  def registerForEvents(self, asyncSocket, readEvents, writeEvents):
+  def registerForEvents(self, fileno, readEvents, writeEvents):
     raise NotImplementedError
 
   @abc.abstractmethod
-  def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
+  def modifyRegistrationForEvents(self, fileno, readEvents, writeEvents):
     raise NotImplementedError
 
   @abc.abstractmethod
-  def unregisterForEvents(self, asyncSocket):
+  def unregisterForEvents(self, fileno):
     raise NotImplementedError
 
   @abc.abstractmethod
@@ -493,7 +493,7 @@ class AsyncIOService(object):
       del self.__fdToAsyncSocket[fileno]
     if ((fileno in self.__fdsRegisteredForRead) or
         (fileno in self.__fdsRegisteredForWrite)):
-      self.__poller.unregisterForEvents(asyncSocket)
+      self.__poller.unregisterForEvents(fileno)
       self.__fdsRegisteredForRead.discard(fileno)
       self.__fdsRegisteredForWrite.discard(fileno)
 
@@ -505,10 +505,10 @@ class AsyncIOService(object):
     if fileno not in self.__fdsRegisteredForRead:
       if fileno in self.__fdsRegisteredForWrite:
         self.__poller.modifyRegistrationForEvents(
-          asyncSocket, readEvents = True, writeEvents = True)
+          fileno, readEvents = True, writeEvents = True)
       else:
         self.__poller.registerForEvents(
-          asyncSocket, readEvents = True, writeEvents = False)
+          fileno, readEvents = True, writeEvents = False)
       self.__fdsRegisteredForRead.add(fileno)
 
   def unregisterAsyncSocketForRead(self, asyncSocket):
@@ -516,9 +516,9 @@ class AsyncIOService(object):
     if fileno in self.__fdsRegisteredForRead:
       if fileno in self.__fdsRegisteredForWrite:
         self.__poller.modifyRegistrationForEvents(
-          asyncSocket, readEvents = False, writeEvents = True)
+          fileno, readEvents = False, writeEvents = True)
       else:
-        self.__poller.unregisterForEvents(asyncSocket)
+        self.__poller.unregisterForEvents(fileno)
       self.__fdsRegisteredForRead.discard(fileno)
 
   def registerAsyncSocketForWrite(self, asyncSocket):
@@ -526,10 +526,10 @@ class AsyncIOService(object):
     if fileno not in self.__fdsRegisteredForWrite:
       if fileno in self.__fdsRegisteredForRead:
         self.__poller.modifyRegistrationForEvents(
-          asyncSocket, readEvents = True, writeEvents = True)
+          fileno, readEvents = True, writeEvents = True)
       else:
         self.__poller.registerForEvents(
-          asyncSocket, readEvents = False, writeEvents = True)
+          fileno, readEvents = False, writeEvents = True)
       self.__fdsRegisteredForWrite.add(fileno)
 
   def unregisterAsyncSocketForWrite(self, asyncSocket):
@@ -537,9 +537,9 @@ class AsyncIOService(object):
     if fileno in self.__fdsRegisteredForWrite:
       if fileno in self.__fdsRegisteredForRead:
         self.__poller.modifyRegistrationForEvents(
-          asyncSocket, readEvents = True, writeEvents = False)
+          fileno, readEvents = True, writeEvents = False)
       else:
-        self.__poller.unregisterForEvents(asyncSocket)
+        self.__poller.unregisterForEvents(fileno)
       self.__fdsRegisteredForWrite.discard(fileno)
 
   def run(self):
@@ -596,8 +596,7 @@ class _EPollPoller(_AbstractPoller):
   def __str__(self):
     return ('EPollPoller [ fileno = {0} ]'.format(self.__poller.fileno()))
 
-  def registerForEvents(self, asyncSocket, readEvents, writeEvents):
-    fileno = asyncSocket.fileno()
+  def registerForEvents(self, fileno, readEvents, writeEvents):
     eventMask = 0
     if (readEvents):
       eventMask |= select.EPOLLIN
@@ -605,8 +604,7 @@ class _EPollPoller(_AbstractPoller):
       eventMask |= select.EPOLLOUT
     self.__poller.register(fileno, eventMask)
 
-  def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
-    fileno = asyncSocket.fileno()
+  def modifyRegistrationForEvents(self, fileno, readEvents, writeEvents):
     eventMask = 0
     if (readEvents):
       eventMask |= select.EPOLLIN
@@ -614,8 +612,7 @@ class _EPollPoller(_AbstractPoller):
       eventMask |= select.EPOLLOUT
     self.__poller.modify(fileno, eventMask)
 
-  def unregisterForEvents(self, asyncSocket):
-    fileno = asyncSocket.fileno()
+  def unregisterForEvents(self, fileno):
     self.__poller.unregister(fileno)
 
   @_signalSafe
@@ -652,8 +649,7 @@ class _KQueuePoller(_AbstractPoller):
   def __controlKqueue(self, changeList, maxEvents = 0, timeout = 0):
     return self.__kqueue.control(changeList, maxEvents, timeout)
 
-  def registerForEvents(self, asyncSocket, readEvents, writeEvents):
-    fileno = asyncSocket.fileno()
+  def registerForEvents(self, fileno, readEvents, writeEvents):
     if readEvents:
       readKE = select.kevent(ident = fileno,
                              filter = select.KQ_FILTER_READ,
@@ -673,8 +669,7 @@ class _KQueuePoller(_AbstractPoller):
     self.__controlKqueue(changeList = [readKE, writeKE])
     self.__numFDs += 1
 
-  def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
-    fileno = asyncSocket.fileno()
+  def modifyRegistrationForEvents(self, fileno, readEvents, writeEvents):
     if readEvents:
       readKE = select.kevent(ident = fileno,
                              filter = select.KQ_FILTER_READ,
@@ -693,8 +688,7 @@ class _KQueuePoller(_AbstractPoller):
                               flags = select.KQ_EV_DISABLE)
     self.__controlKqueue(changeList = [readKE, writeKE])
 
-  def unregisterForEvents(self, asyncSocket):
-    fileno = asyncSocket.fileno()
+  def unregisterForEvents(self, fileno):
     readKE = select.kevent(ident = fileno,
                            filter = select.KQ_FILTER_READ,
                            flags = select.KQ_EV_DELETE)
@@ -732,8 +726,7 @@ class _PollPoller(_AbstractPoller):
   def __str__(self):
     return 'PollPoller'
 
-  def registerForEvents(self, asyncSocket, readEvents, writeEvents):
-    fileno = asyncSocket.fileno()
+  def registerForEvents(self, fileno, readEvents, writeEvents):
     eventMask = 0
     if (readEvents):
       eventMask |= select.POLLIN
@@ -741,8 +734,7 @@ class _PollPoller(_AbstractPoller):
       eventMask |= select.POLLOUT
     self.__poller.register(fileno, eventMask)
 
-  def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
-    fileno = asyncSocket.fileno()
+  def modifyRegistrationForEvents(self, fileno, readEvents, writeEvents):
     eventMask = 0
     if (readEvents):
       eventMask |= select.POLLIN
@@ -750,8 +742,7 @@ class _PollPoller(_AbstractPoller):
       eventMask |= select.POLLOUT
     self.__poller.modify(fileno, eventMask)
 
-  def unregisterForEvents(self, asyncSocket):
-    fileno = asyncSocket.fileno()
+  def unregisterForEvents(self, fileno):
     self.__poller.unregister(fileno)
 
   @_signalSafe
@@ -784,11 +775,10 @@ class _SelectPoller(_AbstractPoller):
   def __str__(self):
     return 'SelectPoller'
 
-  def registerForEvents(self, asyncSocket, readEvents, writeEvents):
-    self.modifyRegistrationForEvents(asyncSocket, readEvents, writeEvents)
+  def registerForEvents(self, fileno, readEvents, writeEvents):
+    self.modifyRegistrationForEvents(fileno, readEvents, writeEvents)
 
-  def modifyRegistrationForEvents(self, asyncSocket, readEvents, writeEvents):
-    fileno = asyncSocket.fileno()
+  def modifyRegistrationForEvents(self, fileno, readEvents, writeEvents):
     if readEvents:
       self.__readFDSet.add(fileno)
     else:
@@ -798,8 +788,7 @@ class _SelectPoller(_AbstractPoller):
     else:
       self.__writeFDSet.discard(fileno)
 
-  def unregisterForEvents(self, asyncSocket):
-    fileno = asyncSocket.fileno()
+  def unregisterForEvents(self, fileno):
     self.__readFDSet.discard(fileno)
     self.__writeFDSet.discard(fileno)
 
