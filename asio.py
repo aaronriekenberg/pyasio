@@ -496,14 +496,9 @@ class _AsyncTimerService(object):
   def _getEarliestTimeoutDeltaSeconds(self):
     earliestTimer = self.__peekAtEarliestTimer()
     if (earliestTimer is None):
-      # default to one minute in the future if no timers are set
-      return 60
+      return None
     else:
-      # return delta time to earliest timer
-      delta = (earliestTimer._getAbsoluteTimeoutTimeSeconds() - time.time())
-      if (delta < 0):
-        delta = 0
-      return delta
+      return (earliestTimer._getAbsoluteTimeoutTimeSeconds() - time.time())
 
   def _firePendingTimers(self):
     done = False
@@ -619,6 +614,14 @@ class AsyncIOService(object):
         self.__poller._unregisterForEvents(fileno)
       self.__fdsRegisteredForWrite.discard(fileno)
 
+  def __computeBlockSeconds(self):
+    deltaSeconds = self.__asyncTimerService._getEarliestTimeoutDeltaSeconds()
+    if (deltaSeconds is None):
+      deltaSeconds = 60
+    elif (deltaSeconds < 0):
+      deltaSeconds = 0
+    return deltaSeconds
+
   def run(self):
     while True:
       # As we process events in self.__eventQueue, more events are likely
@@ -647,7 +650,7 @@ class AsyncIOService(object):
       block = True
       if (len(self.__eventQueue) > 0):
         block = False
-      blockSeconds = self.__asyncTimerService._getEarliestTimeoutDeltaSeconds()
+      blockSeconds = self.__computeBlockSeconds()
       self.__poller._poll(
         block = block,
         blockSeconds = blockSeconds,
