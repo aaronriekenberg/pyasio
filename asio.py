@@ -25,6 +25,7 @@ import functools
 import os
 import select
 import socket
+import sys
 
 '''Asynchronous socket service inspired by the basic design of Boost ASIO.
 
@@ -39,6 +40,12 @@ Aaron Riekenberg
 aaron.riekenberg@gmail.com
 '''
 
+def _checkPythonVersion():
+  if ((sys.version_info.major < 3) or (sys.version_info.minor < 3)):
+    raise ImportError('Python 3.3 or newer required')
+
+_checkPythonVersion()
+
 _ACCEPT_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
 _CONNECT_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EINPROGRESS, errno.EINTR])
 _READ_WOULD_BLOCK_ERRNO_SET = frozenset([errno.EAGAIN, errno.EWOULDBLOCK])
@@ -52,7 +59,7 @@ def _signalSafe(function):
     while True:
       try:
         return function(*args, **kwargs)
-      except EnvironmentError as e:
+      except OSError as e:
         if (e.errno == _INTERRUPTED_ERRNO):
           pass
         else:
@@ -124,7 +131,7 @@ class _AsyncAcceptOperation(_AbstractAsyncOperation):
       (newSocket, addr) = self.__signalSafeAccept()
       asyncSocket = AsyncSocket(self.__asyncIOService, newSocket)
       self.__setComplete(asyncSocket, _NO_ERROR_OBJECT)
-    except EnvironmentError as e:
+    except OSError as e:
       if e.errno in _ACCEPT_WOULD_BLOCK_ERRNO_SET:
         self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
       else:
@@ -206,7 +213,7 @@ class _AsyncReadOperation(_AbstractAsyncOperation):
     try:
       data = self.__signalSafeRecv()
       self.__setComplete(data, _NO_ERROR_OBJECT)
-    except EnvironmentError as e:
+    except OSError as e:
       if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
         self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
       else:
@@ -251,7 +258,7 @@ class _AsyncWriteAllOperation(_AbstractAsyncOperation):
         self.__setComplete(_NO_ERROR_OBJECT)
       else:
         writeWouldBlock = True
-    except EnvironmentError as e:
+    except OSError as e:
       if e.errno in _WRITE_WOULD_BLOCK_ERRNO_SET:
         writeWouldBlock = True
       else:
@@ -437,6 +444,11 @@ class AsyncSocket(object):
     return operation
 
 class _AbstractPoller(metaclass = abc.ABCMeta):
+
+  @staticmethod
+  @abc.abstractmethod
+  def isAvailable():
+    raise NotImplementedError
 
   @abc.abstractmethod
   def registerForEvents(self, asyncSocket, readEvents, writeEvents):
