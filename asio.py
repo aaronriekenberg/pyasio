@@ -133,15 +133,15 @@ class _AsyncAcceptOperation(_AbstractAsyncOperation):
       self.__setComplete(asyncSocket, _NO_ERROR_OBJECT)
     except OSError as e:
       if e.errno in _ACCEPT_WOULD_BLOCK_ERRNO_SET:
-        self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
+        self.__asyncIOService._registerAsyncSocketForRead(self.__asyncSocket)
       else:
         self.__setComplete(None, ErrorObject(errnoValue = e.errno))
 
   def __setComplete(self, asyncSocket, errorObject):
     if not self.__complete:
       self.__complete = True
-      self.__asyncIOService.unregisterAsyncSocketForRead(self.__asyncSocket)
-      self.__asyncIOService.invokeLater(
+      self.__asyncIOService._unregisterAsyncSocketForRead(self.__asyncSocket)
+      self.__asyncIOService._invokeLater(
         functools.partial(self.__callback, asyncSocket = asyncSocket,
                           error = errorObject))
 
@@ -170,7 +170,7 @@ class _AsyncConnectOperation(_AbstractAsyncOperation):
       errnoValue = self.__asyncSocket.getSocket().connect_ex(self.__address)
       self.__calledConnect = True
       if errnoValue in _CONNECT_WOULD_BLOCK_ERRNO_SET:
-        self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
+        self.__asyncIOService._registerAsyncSocketForWrite(self.__asyncSocket)
       else:
         self.__setComplete(ErrorObject(errnoValue = errnoValue))
     else:
@@ -182,8 +182,8 @@ class _AsyncConnectOperation(_AbstractAsyncOperation):
   def __setComplete(self, errorObject):
     if not self.__complete:
       self.__complete = True
-      self.__asyncIOService.unregisterAsyncSocketForWrite(self.__asyncSocket)
-      self.__asyncIOService.invokeLater(
+      self.__asyncIOService._unregisterAsyncSocketForWrite(self.__asyncSocket)
+      self.__asyncIOService._invokeLater(
         functools.partial(self.__callback, error = errorObject))
 
   def handleSocketError(self, errorObject):
@@ -215,15 +215,15 @@ class _AsyncReadOperation(_AbstractAsyncOperation):
       self.__setComplete(data, _NO_ERROR_OBJECT)
     except OSError as e:
       if e.errno in _READ_WOULD_BLOCK_ERRNO_SET:
-        self.__asyncIOService.registerAsyncSocketForRead(self.__asyncSocket)
+        self.__asyncIOService._registerAsyncSocketForRead(self.__asyncSocket)
       else:
         self.__setComplete(None, ErrorObject(errnoValue = e.errno))
 
   def __setComplete(self, data, errorObject):
     if not self.__complete:
       self.__complete = True
-      self.__asyncIOService.unregisterAsyncSocketForRead(self.__asyncSocket)
-      self.__asyncIOService.invokeLater(
+      self.__asyncIOService._unregisterAsyncSocketForRead(self.__asyncSocket)
+      self.__asyncIOService._invokeLater(
         functools.partial(self.__callback, data = data, error = errorObject))
 
   def handleSocketError(self, errorObject):
@@ -265,13 +265,13 @@ class _AsyncWriteAllOperation(_AbstractAsyncOperation):
         self.__setComplete(ErrorObject(errnoValue = e.errno))
 
     if (writeWouldBlock):
-      self.__asyncIOService.registerAsyncSocketForWrite(self.__asyncSocket)
+      self.__asyncIOService._registerAsyncSocketForWrite(self.__asyncSocket)
 
   def __setComplete(self, errorObject):
     if not self.__complete:
       self.__complete = True
-      self.__asyncIOService.unregisterAsyncSocketForWrite(self.__asyncSocket)
-      self.__asyncIOService.invokeLater(
+      self.__asyncIOService._unregisterAsyncSocketForWrite(self.__asyncSocket)
+      self.__asyncIOService._invokeLater(
         functools.partial(self.__callback, error = errorObject))
 
   def handleSocketError(self, errorObject):
@@ -294,7 +294,7 @@ class AsyncSocket(object):
     else:
       self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     self.__socket.setblocking(0)
-    asyncIOService.addAsyncSocket(self)
+    asyncIOService._addAsyncSocket(self)
 
   def __str__(self):
     return ('AsyncSocket [ fileno = {0} ]'.format(self.fileno()))
@@ -404,11 +404,11 @@ class AsyncSocket(object):
     self.__writeOperation = self.__sendErrorToOperation(
       self.__writeOperation, errorObject)
 
-    self.__asyncIOService.removeAsyncSocket(self)
+    self.__asyncIOService._removeAsyncSocket(self)
     self.__signalSafeClose()
     self.__closed = True
 
-  def handleErrorReady(self):
+  def _handleErrorReady(self):
     error = ErrorObject(
       errnoValue = self.__socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR))
     if (error):
@@ -421,11 +421,11 @@ class AsyncSocket(object):
       self.__writeOperation = self.__sendErrorToOperation(
         self.__writeOperation, error)
 
-  def handleReadReady(self):
+  def _handleReadReady(self):
     self.__acceptOperation = self.__pollOperation(self.__acceptOperation)
     self.__readOperation = self.__pollOperation(self.__readOperation)
 
-  def handleWriteReady(self):
+  def _handleWriteReady(self):
     self.__connectOperation = self.__pollOperation(self.__connectOperation)
     self.__writeOperation = self.__pollOperation(self.__writeOperation)
 
@@ -484,10 +484,10 @@ class AsyncIOService(object):
   def createAsyncSocket(self):
     return AsyncSocket(asyncIOService = self)
 
-  def addAsyncSocket(self, asyncSocket):
+  def _addAsyncSocket(self, asyncSocket):
     self.__fdToAsyncSocket[asyncSocket.fileno()] = asyncSocket
 
-  def removeAsyncSocket(self, asyncSocket):
+  def _removeAsyncSocket(self, asyncSocket):
     fileno = asyncSocket.fileno()
     if fileno in self.__fdToAsyncSocket:
       del self.__fdToAsyncSocket[fileno]
@@ -497,10 +497,10 @@ class AsyncIOService(object):
       self.__fdsRegisteredForRead.discard(fileno)
       self.__fdsRegisteredForWrite.discard(fileno)
 
-  def invokeLater(self, event):
+  def _invokeLater(self, event):
     self.__eventQueue.append(event)
 
-  def registerAsyncSocketForRead(self, asyncSocket):
+  def _registerAsyncSocketForRead(self, asyncSocket):
     fileno = asyncSocket.fileno()
     if fileno not in self.__fdsRegisteredForRead:
       if fileno in self.__fdsRegisteredForWrite:
@@ -511,7 +511,7 @@ class AsyncIOService(object):
           fileno, readEvents = True, writeEvents = False)
       self.__fdsRegisteredForRead.add(fileno)
 
-  def unregisterAsyncSocketForRead(self, asyncSocket):
+  def _unregisterAsyncSocketForRead(self, asyncSocket):
     fileno = asyncSocket.fileno()
     if fileno in self.__fdsRegisteredForRead:
       if fileno in self.__fdsRegisteredForWrite:
@@ -521,7 +521,7 @@ class AsyncIOService(object):
         self.__poller.unregisterForEvents(fileno)
       self.__fdsRegisteredForRead.discard(fileno)
 
-  def registerAsyncSocketForWrite(self, asyncSocket):
+  def _registerAsyncSocketForWrite(self, asyncSocket):
     fileno = asyncSocket.fileno()
     if fileno not in self.__fdsRegisteredForWrite:
       if fileno in self.__fdsRegisteredForRead:
@@ -532,7 +532,7 @@ class AsyncIOService(object):
           fileno, readEvents = False, writeEvents = True)
       self.__fdsRegisteredForWrite.add(fileno)
 
-  def unregisterAsyncSocketForWrite(self, asyncSocket):
+  def _unregisterAsyncSocketForWrite(self, asyncSocket):
     fileno = asyncSocket.fileno()
     if fileno in self.__fdsRegisteredForWrite:
       if fileno in self.__fdsRegisteredForRead:
@@ -545,7 +545,7 @@ class AsyncIOService(object):
   def run(self):
     while True:
       # As we process events in self.__eventQueue, more events are likely
-      # to be added to it by invokeLater.  We don't want to starve events
+      # to be added to it by _invokeLater.  We don't want to starve events
       # coming in from poll, so we limit the number of events processed
       # from self.__eventQueue to the initial size of the queue.  After this if
       # the queue is still not empty, set poll to be non blocking so we get
@@ -577,11 +577,11 @@ class AsyncIOService(object):
     asyncSocket = self.__fdToAsyncSocket.get(fd)
     if asyncSocket is not None:
       if (readReady):
-        asyncSocket.handleReadReady()
+        asyncSocket._handleReadReady()
       if (writeReady):
-        asyncSocket.handleWriteReady()
+        asyncSocket._handleWriteReady()
       if (errorReady):
-        asyncSocket.handleErrorReady()
+        asyncSocket._handleErrorReady()
 
 class _EPollPoller(_AbstractPoller):
 
