@@ -646,7 +646,7 @@ class _KQueuePoller(_AbstractPoller):
     return ('KQueuePoller [ fileno = {0} ]'.format(self.__kqueue.fileno()))
 
   @_signalSafe
-  def __controlKqueue(self, changeList, maxEvents = 0, timeout = 0):
+  def __controlKqueue(self, changeList = None, maxEvents = 0, timeout = 0):
     return self.__kqueue.control(changeList, maxEvents, timeout)
 
   def registerForEvents(self, fileno, readEvents, writeEvents):
@@ -700,7 +700,6 @@ class _KQueuePoller(_AbstractPoller):
 
   def poll(self, block, eventCallback):
     eventList = self.__controlKqueue(
-                  changeList = None,
                   maxEvents = (self.__numFDs * 2),
                   timeout = (None if block else 0))
     for ke in eventList:
