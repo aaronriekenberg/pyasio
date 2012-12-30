@@ -530,7 +530,7 @@ class _AbstractPoller(metaclass = abc.ABCMeta):
     raise NotImplementedError
 
   @abc.abstractmethod
-  def _poll(self, block, blockSeconds, eventCallback):
+  def _poll(self, blockSeconds, eventCallback):
     raise NotImplementedError
 
 class AsyncIOService(object):
@@ -614,15 +614,21 @@ class AsyncIOService(object):
         self.__poller._unregisterForEvents(fileno)
       self.__fdsRegisteredForWrite.discard(fileno)
 
-  def __computeBlockSeconds(self):
-    deltaSeconds = self.__asyncTimerService._getEarliestTimeoutDeltaSeconds()
-    if (deltaSeconds is None):
-      deltaSeconds = 60
-    elif (deltaSeconds < 0):
-      deltaSeconds = 0
-    return deltaSeconds
 
   def run(self):
+
+    def computeBlockSeconds():
+      blockSeconds = 0
+      if (len(self.__eventQueue) == 0):
+        # self.__eventQueue is empty, so block for one minute or until the
+        # next timer pop, whichever comes first.
+        blockSeconds = self.__asyncTimerService._getEarliestTimeoutDeltaSeconds()
+        if ((blockSeconds is None) or (blockSeconds > 60)):
+          blockSeconds = 60
+        elif (blockSeconds < 0):
+          blockSeconds = 0
+      return blockSeconds
+
     while True:
       # As we process events in self.__eventQueue, more events are likely
       # to be added to it by _invokeLater.  We don't want to starve events
@@ -647,13 +653,8 @@ class AsyncIOService(object):
           (len(self.__fdsRegisteredForWrite) == 0)):
         break
 
-      block = True
-      if (len(self.__eventQueue) > 0):
-        block = False
-      blockSeconds = self.__computeBlockSeconds()
       self.__poller._poll(
-        block = block,
-        blockSeconds = blockSeconds,
+        blockSeconds = computeBlockSeconds(),
         eventCallback = self.__handleEventForFD)
 
       self.__asyncTimerService._firePendingTimers()
@@ -701,13 +702,11 @@ class _EPollPoller(_AbstractPoller):
     self.__poller.unregister(fileno)
 
   @_signalSafe
-  def __poll(self, block, blockSeconds):
-    return self.__poller.poll(blockSeconds if block else 0)
+  def __poll(self, blockSeconds):
+    return self.__poller.poll(blockSeconds)
 
-  def _poll(self, block, blockSeconds, eventCallback):
-    readyList = self.__poll(
-                  block = block,
-                  blockSeconds = blockSeconds)
+  def _poll(self, blockSeconds, eventCallback):
+    readyList = self.__poll(blockSeconds)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.EPOLLIN) != 0)
       writeReady = ((eventMask & select.EPOLLOUT) != 0)
@@ -785,10 +784,10 @@ class _KQueuePoller(_AbstractPoller):
     self.__controlKqueue(changeList = [readKE, writeKE])
     self.__numFDs -= 1
 
-  def _poll(self, block, blockSeconds, eventCallback):
+  def _poll(self, blockSeconds, eventCallback):
     eventList = self.__controlKqueue(
                   maxEvents = (self.__numFDs * 2),
-                  timeout = (blockSeconds if block else 0))
+                  timeout = blockSeconds)
     for ke in eventList:
       fd = ke.ident
       readReady = (ke.filter == select.KQ_FILTER_READ)
@@ -832,11 +831,11 @@ class _PollPoller(_AbstractPoller):
     self.__poller.unregister(fileno)
 
   @_signalSafe
-  def __poll(self, block, blockSeconds):
-    return self.__poller.poll(int(blockSeconds * 1000) if block else 0)
+  def __poll(self, blockSeconds):
+    return self.__poller.poll(int(blockSeconds * 1000))
 
-  def _poll(self, block, blockSeconds, eventCallback):
-    readyList = self.__poll(block = block, blockSeconds = blockSeconds)
+  def _poll(self, blockSeconds, eventCallback):
+    readyList = self.__poll(blockSeconds)
     for (fd, eventMask) in readyList:
       readReady = ((eventMask & select.POLLIN) != 0)
       writeReady = ((eventMask & select.POLLOUT) != 0)
@@ -879,16 +878,15 @@ class _SelectPoller(_AbstractPoller):
     self.__writeFDSet.discard(fileno)
 
   @_signalSafe
-  def __poll(self, allFDSet, block, blockSeconds):
+  def __poll(self, allFDSet, blockSeconds):
     return select.select(
       self.__readFDSet, self.__writeFDSet, allFDSet,
-      blockSeconds if block else 0)
+      blockSeconds)
 
-  def _poll(self, block, blockSeconds, eventCallback):
+  def _poll(self, blockSeconds, eventCallback):
     allFDSet = self.__readFDSet | self.__writeFDSet
     (readList, writeList, exceptList) = self.__poll(
       allFDSet = allFDSet,
-      block = block,
       blockSeconds = blockSeconds)
     for fd in allFDSet:
       readReady = fd in readList
