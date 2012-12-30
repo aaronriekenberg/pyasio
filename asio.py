@@ -656,7 +656,7 @@ class AsyncIOService:
       # to be added to it by _invokeLater.  We don't want to starve events
       # coming in from _poll, so we limit the number of events processed
       # from self.__eventQueue to the initial size of the queue.  After this if
-      # the queue is still not empty, set _poll to be non blocking so we get
+      # the queue is still not empty, set block seconds to 0 so we get
       # back to processing events in the queue in a timely manner.
       initialQueueLength = len(self.__eventQueue)
       eventsProcessed = 0
@@ -666,7 +666,7 @@ class AsyncIOService:
         event()
         eventsProcessed += 1
       # Set event to None so we don't hang on to a reference to event during the
-      # potentially long-running _poll below.
+      # potentially long-running _pollFDs below.
       event = None
 
       if ((len(self.__eventQueue) == 0) and
