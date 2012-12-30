@@ -43,7 +43,7 @@ def createLogger():
 
 logger = createLogger()
 
-class Connection(object):
+class Connection:
 
   def __init__(self, ioService, clientToProxySocket,
                remoteAddress, remotePort):
@@ -146,7 +146,7 @@ class Connection(object):
     else:
       self.__proxyToRemoteSocket.asyncRead(MAX_READ_BYTES, self.__readFromRemoteCallback)
 
-class Acceptor(object):
+class Acceptor:
 
   def __init__(self, ioService,
                localAddress, localPort,
