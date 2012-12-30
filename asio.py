@@ -614,7 +614,6 @@ class AsyncIOService(object):
         self.__poller._unregisterForEvents(fileno)
       self.__fdsRegisteredForWrite.discard(fileno)
 
-
   def run(self):
 
     def computeBlockSeconds():
