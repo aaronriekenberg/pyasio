@@ -78,7 +78,7 @@ class AsyncException(Exception):
   def __str__(self):
     return repr(self.__value)
 
-class ErrorObject(object):
+class ErrorObject:
 
   def __init__(self, errnoValue):
     super().__init__()
@@ -280,7 +280,7 @@ class _AsyncWriteAllOperation(_AbstractAsyncOperation):
   def _handleSocketError(self, errorObject):
     self.__setComplete(errorObject)
 
-class AsyncSocket(object):
+class AsyncSocket:
 
   '''Socket class supporting asynchronous operations.'''
 
@@ -446,7 +446,7 @@ class AsyncSocket(object):
         operation = None
     return operation
 
-class _AsyncTimer(object):
+class _AsyncTimer:
 
   def __init__(self, deltaTimeSeconds, callback, asyncIOService):
     super().__init__()
@@ -463,18 +463,17 @@ class _AsyncTimer(object):
       self.__callbackFired = True
       self.__asyncIOService._invokeLater(self.__callback)
 
-class _AsyncTimerService(object):
+class _AsyncTimerService:
 
-  def __init__(self, asyncIOService):
+  def __init__(self):
     super().__init__()
-    self.__asyncIOService = asyncIOService
     self.__asyncTimerHeap = []
     self.__heapCounter = itertools.count()
 
   def __peekAtEarliestTimer(self):
     if (len(self.__asyncTimerHeap) > 0):
-      (timeoutTimeSeconds, counter, timer) = self.__asyncTimerHeap[0]
-      return timer
+      (timeoutTimeSeconds, counter, asyncTimer) = self.__asyncTimerHeap[0]
+      return asyncTimer
     else:
       return None
 
@@ -482,12 +481,10 @@ class _AsyncTimerService(object):
     if (len(self.__asyncTimerHeap) > 0):
       heapq.heappop(self.__asyncTimerHeap)
 
-  def _scheduleTimer(self, deltaTimeSeconds, callback):
-    timer = _AsyncTimer(deltaTimeSeconds, callback, self.__asyncIOService)
-
+  def _scheduleTimer(self, asyncTimer):
     # 3-tuple idea borrowed from http://docs.python.org/3/library/heapq.html
-    heapTuple = (timer._getAbsoluteTimeoutTimeSeconds(),
-                 next(self.__heapCounter), timer)
+    heapTuple = (asyncTimer._getAbsoluteTimeoutTimeSeconds(),
+                 next(self.__heapCounter), asyncTimer)
     heapq.heappush(self.__asyncTimerHeap, heapTuple)
 
   def _getNumPendingTimers(self):
@@ -510,51 +507,14 @@ class _AsyncTimerService(object):
         self.__removeEarliestTimer()
         earliestTimer._fireCallback()
 
-class _AbstractPoller(metaclass = abc.ABCMeta):
-
-  @staticmethod
-  @abc.abstractmethod
-  def _isAvailable():
-    raise NotImplementedError
-
-  @abc.abstractmethod
-  def _registerForEvents(self, fileno, readEvents, writeEvents):
-    raise NotImplementedError
-
-  @abc.abstractmethod
-  def _modifyRegistrationForEvents(self, fileno, readEvents, writeEvents):
-    raise NotImplementedError
-
-  @abc.abstractmethod
-  def _unregisterForEvents(self, fileno):
-    raise NotImplementedError
-
-  @abc.abstractmethod
-  def _poll(self, blockSeconds, eventCallback):
-    raise NotImplementedError
-
-class AsyncIOService(object):
-
-  '''Service used to poll asynchronous sockets.'''
+class _AsyncFDService:
 
   def __init__(self, poller):
     super().__init__()
-    self.__poller = poller
     self.__fdToAsyncSocket = {}
     self.__fdsRegisteredForRead = set()
     self.__fdsRegisteredForWrite = set()
-    self.__eventQueue = collections.deque()
-    self.__asyncTimerService = _AsyncTimerService(self)
-
-  def __str__(self):
-    return 'AsyncIOService [ poller = ' + str(self.__poller) + ' ]'
-
-  def createAsyncSocket(self):
-    return AsyncSocket(asyncIOService = self)
-
-  def scheduleTimer(self, deltaTimeSeconds, callback):
-    self.__asyncTimerService._scheduleTimer(
-      deltaTimeSeconds = deltaTimeSeconds, callback = callback)
+    self.__poller = poller
 
   def _addAsyncSocket(self, asyncSocket):
     self.__fdToAsyncSocket[asyncSocket.fileno()] = asyncSocket
@@ -568,9 +528,6 @@ class AsyncIOService(object):
       self.__poller._unregisterForEvents(fileno)
       self.__fdsRegisteredForRead.discard(fileno)
       self.__fdsRegisteredForWrite.discard(fileno)
-
-  def _invokeLater(self, event):
-    self.__eventQueue.append(event)
 
   def _registerAsyncSocketForRead(self, asyncSocket):
     fileno = asyncSocket.fileno()
@@ -614,6 +571,72 @@ class AsyncIOService(object):
         self.__poller._unregisterForEvents(fileno)
       self.__fdsRegisteredForWrite.discard(fileno)
 
+  def _getNumFDsRegisteredForRead(self):
+    return len(self.__fdsRegisteredForRead)
+
+  def _getNumFDsRegisteredForWrite(self):
+    return len(self.__fdsRegisteredForWrite)
+
+  def _pollFDs(self, blockSeconds):
+    self.__poller._poll(
+      blockSeconds = blockSeconds,
+      eventCallback = self.__handleEventForFD)
+
+  def __handleEventForFD(self, fd, readReady, writeReady, errorReady):
+    asyncSocket = self.__fdToAsyncSocket.get(fd)
+    if asyncSocket is not None:
+      if (readReady):
+        asyncSocket._handleReadReady()
+      if (writeReady):
+        asyncSocket._handleWriteReady()
+      if (errorReady):
+        asyncSocket._handleErrorReady()
+
+class AsyncIOService:
+
+  '''Service used to poll asynchronous sockets.'''
+
+  def __init__(self, poller):
+    super().__init__()
+    self.__poller = poller
+    self.__eventQueue = collections.deque()
+    self.__asyncTimerService = _AsyncTimerService()
+    self.__asyncFDService = _AsyncFDService(poller = poller)
+
+  def __str__(self):
+    return 'AsyncIOService [ poller = ' + str(self.__poller) + ' ]'
+
+  def createAsyncSocket(self):
+    return AsyncSocket(asyncIOService = self)
+
+  def scheduleTimer(self, deltaTimeSeconds, callback):
+    self.__asyncTimerService._scheduleTimer(
+      _AsyncTimer(
+        deltaTimeSeconds = deltaTimeSeconds,
+        callback = callback,
+        asyncIOService = self))
+
+  def _invokeLater(self, event):
+    self.__eventQueue.append(event)
+
+  def _addAsyncSocket(self, asyncSocket):
+    self.__asyncFDService._addAsyncSocket(asyncSocket)
+
+  def _removeAsyncSocket(self, asyncSocket):
+    self.__asyncFDService._removeAsyncSocket(asyncSocket)
+
+  def _registerAsyncSocketForRead(self, asyncSocket):
+    self.__asyncFDService._registerAsyncSocketForRead(asyncSocket)
+
+  def _unregisterAsyncSocketForRead(self, asyncSocket):
+    self.__asyncFDService._unregisterAsyncSocketForRead(asyncSocket)
+
+  def _registerAsyncSocketForWrite(self, asyncSocket):
+    self.__asyncFDService._registerAsyncSocketForWrite(asyncSocket)
+
+  def _unregisterAsyncSocketForWrite(self, asyncSocket):
+    self.__asyncFDService._unregisterAsyncSocketForWrite(asyncSocket)
+
   def run(self):
 
     def computeBlockSeconds():
@@ -648,25 +671,38 @@ class AsyncIOService(object):
 
       if ((len(self.__eventQueue) == 0) and
           (self.__asyncTimerService._getNumPendingTimers() == 0) and
-          (len(self.__fdsRegisteredForRead) == 0) and
-          (len(self.__fdsRegisteredForWrite) == 0)):
+          (self.__asyncFDService._getNumFDsRegisteredForRead() == 0) and
+          (self.__asyncFDService._getNumFDsRegisteredForWrite() == 0)):
+        # The event queue is empty, and there are no events to wait for.
+        # Break out of the loop.
         break
 
-      self.__poller._poll(
-        blockSeconds = computeBlockSeconds(),
-        eventCallback = self.__handleEventForFD)
+      self.__asyncFDService._pollFDs(blockSeconds = computeBlockSeconds())
 
       self.__asyncTimerService._firePendingTimers()
 
-  def __handleEventForFD(self, fd, readReady, writeReady, errorReady):
-    asyncSocket = self.__fdToAsyncSocket.get(fd)
-    if asyncSocket is not None:
-      if (readReady):
-        asyncSocket._handleReadReady()
-      if (writeReady):
-        asyncSocket._handleWriteReady()
-      if (errorReady):
-        asyncSocket._handleErrorReady()
+class _AbstractPoller(metaclass = abc.ABCMeta):
+
+  @staticmethod
+  @abc.abstractmethod
+  def _isAvailable():
+    raise NotImplementedError
+
+  @abc.abstractmethod
+  def _registerForEvents(self, fileno, readEvents, writeEvents):
+    raise NotImplementedError
+
+  @abc.abstractmethod
+  def _modifyRegistrationForEvents(self, fileno, readEvents, writeEvents):
+    raise NotImplementedError
+
+  @abc.abstractmethod
+  def _unregisterForEvents(self, fileno):
+    raise NotImplementedError
+
+  @abc.abstractmethod
+  def _poll(self, blockSeconds, eventCallback):
+    raise NotImplementedError
 
 class _EPollPoller(_AbstractPoller):
 
