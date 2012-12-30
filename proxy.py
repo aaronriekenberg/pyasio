@@ -58,7 +58,7 @@ class Connection:
     self.__remoteAddress = remoteAddress
     self.__remotePort = remotePort
     self.__connectComplete = False
-    self.__connectTimedout = False
+    self.__connectTimedOut = False
 
   def start(self):
     self.__proxyToRemoteSocket.asyncConnect(
@@ -86,12 +86,12 @@ class Connection:
   def __connectTimeoutTimerPop(self):
     if not self.__connectComplete:
       logger.info('connect timed out')
-      self.__connectTimedout = True
+      self.__connectTimedOut = True
       self.close()
 
   def __connectCallback(self, error):
     self.__connectComplete = True
-    if (self.__connectTimedout):
+    if (self.__connectTimedOut):
       self.close()
     elif (error):
       logger.info('connect error: {0}'.format(error))
