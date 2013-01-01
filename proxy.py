@@ -57,15 +57,13 @@ class Connection:
     self.__proxyToRemoteString = ''
     self.__remoteAddress = remoteAddress
     self.__remotePort = remotePort
-    self.__connectComplete = False
-    self.__connectTimedOut = False
-    self.__connectTimerID = None
+    self.__connectTimer = None
 
   def start(self):
     self.__proxyToRemoteSocket.asyncConnect(
       (self.__remoteAddress, self.__remotePort), 
       self.__connectCallback)
-    self.__connectTimerID = self.__ioService.scheduleTimer(
+    self.__connectTimer = self.__ioService.scheduleTimer(
       deltaTimeSeconds = 5,
       callback = self.__connectTimeoutTimerPop)
 
@@ -85,32 +83,34 @@ class Connection:
       self.__proxyToRemoteSocket.close()
 
   def __connectTimeoutTimerPop(self):
-    if not self.__connectComplete:
+    if (self.__connectTimer is not None):
       logger.info('connect timed out')
-      self.__connectTimedOut = True
+      self.__connectTimer = None
       self.close()
 
   def __connectCallback(self, error):
-    self.__connectComplete = True
-    self.__ioService.cancelTimer(self.__connectTimerID)
-    if (self.__connectTimedOut):
-      self.close()
-    elif (error):
-      logger.info('connect error: {0}'.format(error))
+    if (self.__connectTimer is None):
+      # connection has already timed out
       self.close()
     else:
-      self.__proxyToRemoteString = '{0} -> {1}'.format(
-        self.__proxyToRemoteSocket.getpeername(),
-        self.__proxyToRemoteSocket.getsockname())
-      logger.info('connect {0} (fd={1})'.format(
-                  self.__proxyToRemoteString,
-                  self.__proxyToRemoteSocket.fileno()))
-      self.__clientToProxySocket.asyncRead(
-        MAX_READ_BYTES,
-        self.__readFromClientCallback)
-      self.__proxyToRemoteSocket.asyncRead(
-        MAX_READ_BYTES,
-        self.__readFromRemoteCallback)
+      self.__connectTimer.cancel()
+      self.__connectTimer = None
+      if (error):
+        logger.info('connect error: {0}'.format(error))
+        self.close()
+      else:
+        self.__proxyToRemoteString = '{0} -> {1}'.format(
+          self.__proxyToRemoteSocket.getpeername(),
+          self.__proxyToRemoteSocket.getsockname())
+        logger.info('connect {0} (fd={1})'.format(
+                    self.__proxyToRemoteString,
+                    self.__proxyToRemoteSocket.fileno()))
+        self.__clientToProxySocket.asyncRead(
+          MAX_READ_BYTES,
+          self.__readFromClientCallback)
+        self.__proxyToRemoteSocket.asyncRead(
+          MAX_READ_BYTES,
+          self.__readFromRemoteCallback)
 
   def __readFromClientCallback(self, data, error):
     if self.__proxyToRemoteSocket.closed():

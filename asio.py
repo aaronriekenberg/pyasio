@@ -446,13 +446,14 @@ class AsyncSocket:
         operation = None
     return operation
 
-class _AsyncTimer:
+class AsyncTimer:
 
   def __init__(self, deltaTimeSeconds, callback, asyncIOService):
     super().__init__()
     self.__absoluteTimeoutTimeSeconds = time.time() + deltaTimeSeconds
     self.__callback = callback
     self.__callbackFired = False
+    self.__cancelled = False
     self.__asyncIOService = asyncIOService
 
   def _getAbsoluteTimeoutTimeSeconds(self):
@@ -463,6 +464,12 @@ class _AsyncTimer:
       self.__callbackFired = True
       self.__asyncIOService._invokeLater(self.__callback)
 
+  def cancel(self):
+    self.__cancelled = True
+
+  def isCancelled(self):
+    return self.__cancelled
+
 class _AsyncTimerService:
 
   def __init__(self):
@@ -470,32 +477,38 @@ class _AsyncTimerService:
     self.__asyncTimerHeap = []
     self.__heapCounter = itertools.count()
 
+  def __cleanupCancelledTimers(self):
+    # Instead of inefficiently removing non-minimal elements from the heap
+    # when a timer is cancelled, we leave cancelled timers in the heap but
+    # flag them as cancelled.
+    # This method removes the earliest cancelled timers from the heap until
+    # either a non-cancelled timer is found, or the heap is empty.
+    foundNonCancelledTimer = False
+    while ((len(self.__asyncTimerHeap) > 0) and (not foundNonCancelledTimer)):
+      (timeoutTimeSeconds, counter, asyncTimer) = self.__asyncTimerHeap[0]
+      if (not asyncTimer.isCancelled()):
+        foundNonCancelledTimer = True
+      else:
+        heapq.heappop(self.__asyncTimerHeap)
+
   def __peekAtEarliestTimer(self):
+    self.__cleanupCancelledTimers()
+
     if (len(self.__asyncTimerHeap) > 0):
       (timeoutTimeSeconds, counter, asyncTimer) = self.__asyncTimerHeap[0]
       return asyncTimer
     else:
       return None
 
-  def __removeEarliestTimer(self):
-    if (len(self.__asyncTimerHeap) > 0):
-      heapq.heappop(self.__asyncTimerHeap)
-
   def _scheduleTimer(self, asyncTimer):
     # 3-tuple idea borrowed from http://docs.python.org/3/library/heapq.html
-    timerID = next(self.__heapCounter)
     heapTuple = (asyncTimer._getAbsoluteTimeoutTimeSeconds(),
-                 timerID, asyncTimer)
+                 next(self.__heapCounter), asyncTimer)
     heapq.heappush(self.__asyncTimerHeap, heapTuple)
-    return timerID
-
-  def _cancelTimer(self, timerID):
-    newHeap = [heapTuple for heapTuple in self.__asyncTimerHeap
-               if (heapTuple[1] != timerID)]
-    heapq.heapify(newHeap)
-    self.__asyncTimerHeap = newHeap
 
   def _getNumPendingTimers(self):
+    self.__cleanupCancelledTimers()
+
     return len(self.__asyncTimerHeap)
 
   def _getEarliestTimeoutDeltaSeconds(self):
@@ -507,12 +520,14 @@ class _AsyncTimerService:
 
   def _firePendingTimers(self):
     done = False
-    while ((self._getNumPendingTimers() > 0) and (not done)):
+    while (not done):
       earliestTimer = self.__peekAtEarliestTimer()
-      if (time.time() < earliestTimer._getAbsoluteTimeoutTimeSeconds()):
+      if (earliestTimer is None):
+        done = True
+      elif (time.time() < earliestTimer._getAbsoluteTimeoutTimeSeconds()):
         done = True
       else:
-        self.__removeEarliestTimer()
+        heapq.heappop(self.__asyncTimerHeap)
         earliestTimer._fireCallback()
 
 class _AsyncFDService:
@@ -618,14 +633,12 @@ class AsyncIOService:
     return AsyncSocket(asyncIOService = self)
 
   def scheduleTimer(self, deltaTimeSeconds, callback):
-    return self.__asyncTimerService._scheduleTimer(
-      _AsyncTimer(
-        deltaTimeSeconds = deltaTimeSeconds,
-        callback = callback,
-        asyncIOService = self))
-
-  def cancelTimer(self, timerID):
-    self.__asyncTimerService._cancelTimer(timerID)
+    asyncTimer = AsyncTimer(
+                   deltaTimeSeconds = deltaTimeSeconds,
+                   callback = callback,
+                   asyncIOService = self)
+    self.__asyncTimerService._scheduleTimer(asyncTimer)
+    return asyncTimer
 
   def _invokeLater(self, event):
     self.__eventQueue.append(event)
