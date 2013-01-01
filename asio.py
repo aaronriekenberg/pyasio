@@ -483,9 +483,17 @@ class _AsyncTimerService:
 
   def _scheduleTimer(self, asyncTimer):
     # 3-tuple idea borrowed from http://docs.python.org/3/library/heapq.html
+    timerID = next(self.__heapCounter)
     heapTuple = (asyncTimer._getAbsoluteTimeoutTimeSeconds(),
-                 next(self.__heapCounter), asyncTimer)
+                 timerID, asyncTimer)
     heapq.heappush(self.__asyncTimerHeap, heapTuple)
+    return timerID
+
+  def _cancelTimer(self, timerID):
+    newHeap = [heapTuple for heapTuple in self.__asyncTimerHeap
+               if (heapTuple[1] != timerID)]
+    heapq.heapify(newHeap)
+    self.__asyncTimerHeap = newHeap
 
   def _getNumPendingTimers(self):
     return len(self.__asyncTimerHeap)
@@ -610,11 +618,14 @@ class AsyncIOService:
     return AsyncSocket(asyncIOService = self)
 
   def scheduleTimer(self, deltaTimeSeconds, callback):
-    self.__asyncTimerService._scheduleTimer(
+    return self.__asyncTimerService._scheduleTimer(
       _AsyncTimer(
         deltaTimeSeconds = deltaTimeSeconds,
         callback = callback,
         asyncIOService = self))
+
+  def cancelTimer(self, timerID):
+    self.__asyncTimerService._cancelTimer(timerID)
 
   def _invokeLater(self, event):
     self.__eventQueue.append(event)

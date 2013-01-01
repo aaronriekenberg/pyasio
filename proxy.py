@@ -59,12 +59,13 @@ class Connection:
     self.__remotePort = remotePort
     self.__connectComplete = False
     self.__connectTimedOut = False
+    self.__connectTimerID = None
 
   def start(self):
     self.__proxyToRemoteSocket.asyncConnect(
       (self.__remoteAddress, self.__remotePort), 
       self.__connectCallback)
-    self.__ioService.scheduleTimer(
+    self.__connectTimerID = self.__ioService.scheduleTimer(
       deltaTimeSeconds = 5,
       callback = self.__connectTimeoutTimerPop)
 
@@ -91,6 +92,7 @@ class Connection:
 
   def __connectCallback(self, error):
     self.__connectComplete = True
+    self.__ioService.cancelTimer(self.__connectTimerID)
     if (self.__connectTimedOut):
       self.close()
     elif (error):
