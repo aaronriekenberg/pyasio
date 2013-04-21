@@ -90,7 +90,7 @@ class ErrorObject:
 
   def __str__(self):
     if (self.__stringValue is None):
-      self.__stringValue = '{0} (errno={1})'.format(
+      self.__stringValue = '{} (errno={})'.format(
         os.strerror(self.__errnoValue), self.__errnoValue)
     return self.__stringValue
 
@@ -300,7 +300,7 @@ class AsyncSocket:
     asyncIOService._addAsyncSocket(self)
 
   def __str__(self):
-    return ('AsyncSocket [ fileno = {0} ]'.format(self.fileno()))
+    return ('AsyncSocket [ fileno = {} ]'.format(self.fileno()))
 
   def getsockname(self):
     self.assertNotClosed()
@@ -739,7 +739,7 @@ class _EPollPoller(_AbstractPoller):
     self.__poller = select.epoll()
 
   def __str__(self):
-    return ('EPollPoller [ fileno = {0} ]'.format(self.__poller.fileno()))
+    return ('EPollPoller [ fileno = {} ]'.format(self.__poller.fileno()))
 
   def _registerForEvents(self, fileno, readEvents, writeEvents):
     eventMask = 0
@@ -788,7 +788,7 @@ class _KQueuePoller(_AbstractPoller):
     self.__numFDs = 0
 
   def __str__(self):
-    return ('KQueuePoller [ fileno = {0} ]'.format(self.__kqueue.fileno()))
+    return ('KQueuePoller [ fileno = {} ]'.format(self.__kqueue.fileno()))
 
   @_signalSafe
   def __controlKqueue(self, changeList = None, maxEvents = 0, timeout = 0):

@@ -50,7 +50,7 @@ class Connection:
     super().__init__()
     self.__ioService = ioService
     self.__clientToProxySocket = clientToProxySocket
-    self.__clientToProxyString = '{0} -> {1}'.format(
+    self.__clientToProxyString = '{} -> {}'.format(
       clientToProxySocket.getpeername(),
       clientToProxySocket.getsockname())
     self.__proxyToRemoteSocket = ioService.createAsyncSocket()
@@ -70,14 +70,14 @@ class Connection:
   def close(self):
     if (not self.__clientToProxySocket.closed()):
       if (len(self.__clientToProxyString) > 0):
-        logger.info('disconnect {0} (fd={1})'.format(
+        logger.info('disconnect {} (fd={})'.format(
                     self.__clientToProxyString,
                     self.__clientToProxySocket.fileno()))
       self.__clientToProxySocket.close()
 
     if (not self.__proxyToRemoteSocket.closed()):
       if (len(self.__proxyToRemoteString) > 0):
-        logger.info('disconnect {0} (fd={1})'.format(
+        logger.info('disconnect {} (fd={})'.format(
                     self.__proxyToRemoteString,
                     self.__proxyToRemoteSocket.fileno()))
       self.__proxyToRemoteSocket.close()
@@ -96,13 +96,13 @@ class Connection:
       self.__connectTimer.cancel()
       self.__connectTimer = None
       if (error):
-        logger.info('connect error: {0}'.format(error))
+        logger.info('connect error: {}'.format(error))
         self.close()
       else:
-        self.__proxyToRemoteString = '{0} -> {1}'.format(
+        self.__proxyToRemoteString = '{} -> {}'.format(
           self.__proxyToRemoteSocket.getpeername(),
           self.__proxyToRemoteSocket.getsockname())
-        logger.info('connect {0} (fd={1})'.format(
+        logger.info('connect {} (fd={})'.format(
                     self.__proxyToRemoteString,
                     self.__proxyToRemoteSocket.fileno()))
         self.__clientToProxySocket.asyncRead(
@@ -166,13 +166,13 @@ class Acceptor:
     self.__asyncSocket.bind((self.__localAddress, self.__localPort))
     self.__asyncSocket.listen()
     self.__asyncSocket.asyncAccept(self.__acceptCallback)
-    logger.info('listening on {0} (fd={1})'.format(
+    logger.info('listening on {} (fd={})'.format(
                 self.__asyncSocket.getsockname(),
                 self.__asyncSocket.fileno()))
 
   def __acceptCallback(self, asyncSocket, error):
     if ((not error) and (asyncSocket is not None)):
-      logger.info('accept {0} -> {1} (fd={2})'.format(
+      logger.info('accept {} -> {} (fd={})'.format(
                   asyncSocket.getpeername(),
                   asyncSocket.getsockname(),
                   asyncSocket.fileno()))
@@ -187,7 +187,7 @@ def parseAddrPortString(addrPortString):
 
 def printUsage():
   logger.error(
-    'Usage: {0} <listen addr> [<listen addr> ...] <remote addr>'.format(
+    'Usage: {} <listen addr> [<listen addr> ...] <remote addr>'.format(
       sys.argv[0]))
 
 def main():
@@ -199,14 +199,14 @@ def main():
   (remoteAddress, remotePort) = parseAddrPortString(sys.argv[-1])
 
   ioService = asio.createAsyncIOService()
-  logger.info('ioService = {0}'.format(ioService))
+  logger.info('ioService = {}'.format(ioService))
   for (localAddress, localPort) in localAddressPortList:
     Acceptor(ioService = ioService,
              localAddress = localAddress,
              localPort = localPort,
              remoteAddress = remoteAddress,
              remotePort = remotePort).start()
-  logger.info('remote address {0}'.format((remoteAddress, remotePort)))
+  logger.info('remote address {}'.format((remoteAddress, remotePort)))
   ioService.run()
 
 if __name__ == '__main__':
