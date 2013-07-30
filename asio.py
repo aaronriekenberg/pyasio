@@ -467,7 +467,7 @@ class AsyncTimer:
   def cancel(self):
     self.__cancelled = True
 
-  def isCancelled(self):
+  def cancelled(self):
     return self.__cancelled
 
 class _AsyncTimerService:
@@ -483,22 +483,19 @@ class _AsyncTimerService:
     # flag them as cancelled.
     # This method removes the earliest cancelled timers from the heap until
     # either a non-cancelled timer is found, or the heap is empty.
-    foundNonCancelledTimer = False
-    while ((len(self.__asyncTimerHeap) > 0) and (not foundNonCancelledTimer)):
-      (timeoutTimeSeconds, counter, asyncTimer) = self.__asyncTimerHeap[0]
-      if (not asyncTimer.isCancelled()):
-        foundNonCancelledTimer = True
-      else:
+    while self.__asyncTimerHeap:
+      asyncTimer = self.__asyncTimerHeap[0][2]
+      if asyncTimer.cancelled():
         heapq.heappop(self.__asyncTimerHeap)
+      else:
+        break
 
   def __peekAtEarliestTimer(self):
     self.__cleanupCancelledTimers()
 
-    if (len(self.__asyncTimerHeap) > 0):
-      (timeoutTimeSeconds, counter, asyncTimer) = self.__asyncTimerHeap[0]
-      return asyncTimer
-    else:
-      return None
+    if self.__asyncTimerHeap:
+      return self.__asyncTimerHeap[0][2]
+    return None
 
   def _scheduleTimer(self, asyncTimer):
     # 3-tuple idea borrowed from http://docs.python.org/3/library/heapq.html
@@ -513,19 +510,19 @@ class _AsyncTimerService:
 
   def _getEarliestTimeoutDeltaSeconds(self):
     earliestTimer = self.__peekAtEarliestTimer()
-    if (earliestTimer is None):
+    if earliestTimer is None:
       return None
     else:
-      return (earliestTimer._getAbsoluteTimeoutTimeSeconds() - time.time())
+      return max(0,
+                 earliestTimer._getAbsoluteTimeoutTimeSeconds() - time.time())
 
   def _firePendingTimers(self):
-    done = False
-    while (not done):
+    while True:
       earliestTimer = self.__peekAtEarliestTimer()
-      if (earliestTimer is None):
-        done = True
+      if earliestTimer is None:
+        break
       elif (time.time() < earliestTimer._getAbsoluteTimeoutTimeSeconds()):
-        done = True
+        break
       else:
         heapq.heappop(self.__asyncTimerHeap)
         earliestTimer._fireCallback()
@@ -665,14 +662,12 @@ class AsyncIOService:
 
     def computeBlockSeconds():
       blockSeconds = 0
-      if (len(self.__eventQueue) == 0):
+      if not self.__eventQueue:
         # self.__eventQueue is empty, so block for one minute or until the
         # next timer pop, whichever comes first.
         blockSeconds = self.__asyncTimerService._getEarliestTimeoutDeltaSeconds()
         if ((blockSeconds is None) or (blockSeconds > 60)):
           blockSeconds = 60
-        elif (blockSeconds < 0):
-          blockSeconds = 0
       return blockSeconds
 
     while True:
@@ -684,7 +679,7 @@ class AsyncIOService:
       # back to processing events in the queue in a timely manner.
       initialQueueLength = len(self.__eventQueue)
       eventsProcessed = 0
-      while ((len(self.__eventQueue) > 0) and
+      while (self.__eventQueue and
              (eventsProcessed < initialQueueLength)):
         event = self.__eventQueue.popleft()
         event()
@@ -693,10 +688,10 @@ class AsyncIOService:
       # potentially long-running _pollFDs below.
       event = None
 
-      if ((len(self.__eventQueue) == 0) and
-          (self.__asyncTimerService._getNumPendingTimers() == 0) and
+      if ((not self.__eventQueue) and
           (self.__asyncFDService._getNumFDsRegisteredForRead() == 0) and
-          (self.__asyncFDService._getNumFDsRegisteredForWrite() == 0)):
+          (self.__asyncFDService._getNumFDsRegisteredForWrite() == 0) and
+          (self.__asyncTimerService._getNumPendingTimers() == 0)):
         # The event queue is empty, and there are no events to wait for.
         # Break out of the loop.
         break
