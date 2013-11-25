@@ -484,7 +484,7 @@ class _AsyncTimerService:
     # This method removes the earliest cancelled timers from the heap until
     # either a non-cancelled timer is found, or the heap is empty.
     while self.__asyncTimerHeap:
-      asyncTimer = self.__asyncTimerHeap[0][2]
+      asyncTimer = self.__asyncTimerHeap[0][-1]
       if asyncTimer.cancelled():
         heapq.heappop(self.__asyncTimerHeap)
       else:
@@ -494,13 +494,14 @@ class _AsyncTimerService:
     self.__cleanupCancelledTimers()
 
     if self.__asyncTimerHeap:
-      return self.__asyncTimerHeap[0][2]
+      return self.__asyncTimerHeap[0][-1]
     return None
 
   def _scheduleTimer(self, asyncTimer):
     # 3-tuple idea borrowed from http://docs.python.org/3/library/heapq.html
     heapTuple = (asyncTimer._getAbsoluteTimeoutTimeSeconds(),
-                 next(self.__heapCounter), asyncTimer)
+                 next(self.__heapCounter),
+                 asyncTimer)
     heapq.heappush(self.__asyncTimerHeap, heapTuple)
 
   def _getNumPendingTimers(self):
