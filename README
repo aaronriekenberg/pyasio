@@ -5,4 +5,6 @@ write) and server operations (accept).
 
 A small TCP proxy implementation is also included as an example (proxy.py).
 
-This module existed before python 3.4.  If you're using python 3.4 or later and are looking for a way to do asynchronous sockets, see the new built-in asyncio module.
+This module existed before python 3.4 and its new asyncio module.  If you're using 
+python 3.4 or later and need a way to do asynchronous sockets, you probably want
+asyncio instead of this.
