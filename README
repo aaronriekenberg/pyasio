@@ -4,3 +4,5 @@ supports asynchronous versions of common client operations (connect, read,
 write) and server operations (accept).
 
 A small TCP proxy implementation is also included as an example (proxy.py).
+
+This module existed before python 3.4.  If you're using python 3.4 or later and are looking for a way to do asynchronous sockets, see the new built-in asyncio module.
